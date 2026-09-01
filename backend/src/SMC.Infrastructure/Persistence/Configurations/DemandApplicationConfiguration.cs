@@ -30,6 +30,9 @@ public class DemandApplicationConfiguration : IEntityTypeConfiguration<DemandApp
         builder.Property(x => x.Zone).IsRequired().HasMaxLength(30);
         builder.Property(x => x.Prabhag).IsRequired().HasMaxLength(30);
         builder.Property(x => x.AreaSqFt).HasColumnType("decimal(18,2)");
+        builder.Property(x => x.LengthFt).HasColumnType("decimal(18,2)");
+        builder.Property(x => x.WidthFt).HasColumnType("decimal(18,2)");
+        builder.Property(x => x.CalculatedRate).HasColumnType("decimal(18,2)");
         builder.Property(x => x.FeeAmount).HasColumnType("decimal(18,2)");
         builder.HasMany(x => x.Documents).WithOne(x => x.DemandApplication).HasForeignKey(x => x.DemandApplicationId).OnDelete(DeleteBehavior.Cascade);
         builder.HasIndex(x => new { x.Status, x.CreatedAt });
@@ -47,6 +50,10 @@ public class DemandApplicationDocumentConfiguration : IEntityTypeConfiguration<D
         builder.Property(x => x.StoredFileName).IsRequired().HasMaxLength(300);
         builder.Property(x => x.FilePath).IsRequired().HasMaxLength(500);
         builder.Property(x => x.ContentType).HasMaxLength(100);
+        builder.Property(x => x.VerificationStatus).IsRequired().HasMaxLength(30).HasDefaultValue("Unchecked");
+        builder.Property(x => x.RequestRemark).HasMaxLength(1000);
+        builder.Property(x => x.RequestedBy).HasMaxLength(100);
+        builder.Property(x => x.RequestTokenHash).HasMaxLength(64);
         builder.HasIndex(x => x.DemandApplicationId);
     }
 }

@@ -28,6 +28,9 @@ public class DemandApplicationDto
     public string Location { get; set; } = string.Empty;
     public string AvailableSpace { get; set; } = string.Empty;
     public decimal? AreaSqFt { get; set; }
+    public decimal? LengthFt { get; set; }
+    public decimal? WidthFt { get; set; }
+    public decimal? CalculatedRate { get; set; }
     public string ServiceDescription { get; set; } = string.Empty;
     public string SpaceRequirement { get; set; } = string.Empty;
     public string OtherInformation { get; set; } = string.Empty;
@@ -57,6 +60,12 @@ public class DemandApplicationDocumentDto
     public string ContentType { get; set; } = string.Empty;
     public long FileSizeBytes { get; set; }
     public DateTime UploadedAt { get; set; }
+    public string VerificationStatus { get; set; } = "Unchecked";
+    public string? RequestRemark { get; set; }
+    public DateTime? RequestedAt { get; set; }
+    public DateTime? RespondedAt { get; set; }
+    public string? RequestToken { get; set; }
+    public string? SecureRequestUrl { get; set; }
 }
 
 /// <summary>Returned only when an anonymous applicant creates an application.</summary>
@@ -90,6 +99,9 @@ public class CreateDemandApplicationDto
     public string Location { get; set; } = string.Empty;
     public string AvailableSpace { get; set; } = string.Empty;
     public decimal? AreaSqFt { get; set; }
+    public decimal? LengthFt { get; set; }
+    public decimal? WidthFt { get; set; }
+    public decimal? CalculatedRate { get; set; }
     public string ServiceDescription { get; set; } = string.Empty;
     public string SpaceRequirement { get; set; } = string.Empty;
     public string OtherInformation { get; set; } = string.Empty;
@@ -104,3 +116,4 @@ public class CreateDemandApplicationDto
     public decimal? FeeAmount { get; set; }
 }
 public class UpdateDemandApplicationDto : CreateDemandApplicationDto { }
+public class DocumentVerificationDto { public string Status { get; set; } = string.Empty; public string? Remark { get; set; } }

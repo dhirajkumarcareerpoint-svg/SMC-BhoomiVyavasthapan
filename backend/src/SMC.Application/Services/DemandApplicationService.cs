@@ -19,8 +19,10 @@ public interface IDemandApplicationService
     Task<bool> DeleteAsync(int id, string userName);
     Task<DemandApplicationDto?> SubmitAsync(int id, string userName);
     Task<DemandApplicationDocumentDto> AddDocumentAsync(int id, string type, Stream stream, string fileName, string contentType, string userName);
+    Task<DemandApplicationDocumentDto> AddSiteInspectionPhotoAsync(int id, Stream stream, string fileName, string contentType, string userName);
     Task<bool> DeleteDocumentAsync(int id, int documentId, string userName);
     Task<DemandApplicationDocument?> GetDocumentAsync(int documentId);
+    Task<DemandApplicationDocumentDto> SetDocumentVerificationAsync(int applicationId, int documentId, string status, string userName, string? remark = null);
     Task<PublicDemandApplicationSessionDto> CreatePublicAsync(CreateDemandApplicationDto dto);
     Task<DemandApplicationDto?> GetPublicAsync(int id, string? accessToken);
     Task<DemandApplicationDto?> UpdatePublicAsync(int id, UpdateDemandApplicationDto dto, string? accessToken);
@@ -28,6 +30,7 @@ public interface IDemandApplicationService
     Task<DemandApplicationDocumentDto?> AddPublicDocumentAsync(int id, string type, Stream stream, string fileName, string contentType, string? accessToken);
     Task<bool> DeletePublicDocumentAsync(int id, int documentId, string? accessToken);
     Task<DemandApplicationDocument?> GetPublicDocumentAsync(int id, int documentId, string? accessToken);
+    Task<DemandApplicationDocumentDto?> ResubmitPublicDocumentAsync(int id, int documentId, Stream stream, string fileName, string contentType, string? requestToken);
 }
 
 public class DemandApplicationService : IDemandApplicationService
@@ -42,11 +45,17 @@ public class DemandApplicationService : IDemandApplicationService
         Id=x.Id, ApplicationNumber=x.ApplicationNumber, ServiceType=x.ServiceType, BusinessType=x.BusinessType, OtherBusinessType=x.OtherBusinessType,
         ApplicantType=x.ApplicantType, ApplicantName=x.ApplicantName, Mobile=x.Mobile, Email=x.Email, IdentityNumber=x.IdentityNumber, PanNumber=x.PanNumber, GstNumber=x.GstNumber,
         PermanentAddress=x.PermanentAddress, CorrespondenceAddress=x.CorrespondenceAddress, SameAddress=x.SameAddress, State=x.State, District=x.District, City=x.City, Taluka=x.Taluka, PinCode=x.PinCode,
-        Prabhag=x.Prabhag, Location=x.Location, AvailableSpace=x.AvailableSpace, AreaSqFt=x.AreaSqFt, ServiceDescription=x.ServiceDescription, SpaceRequirement=x.SpaceRequirement, OtherInformation=x.OtherInformation,
+        Prabhag=x.Prabhag, Location=x.Location, AvailableSpace=x.AvailableSpace, AreaSqFt=x.AreaSqFt, LengthFt=x.LengthFt, WidthFt=x.WidthFt, CalculatedRate=x.CalculatedRate, ServiceDescription=x.ServiceDescription, SpaceRequirement=x.SpaceRequirement, OtherInformation=x.OtherInformation,
         StartDate=x.StartDate, EndDate=x.EndDate, RequiredDuration=x.RequiredDuration, ElectricityRequired=x.ElectricityRequired, WaterRequired=x.WaterRequired, OtherFacilities=x.OtherFacilities, WasteManagement=x.WasteManagement,
         DeclarationAccepted=x.DeclarationAccepted, FeeAmount=x.FeeAmount, PaymentStatus=x.PaymentStatus, Status=x.Status, CreatedAt=x.CreatedAt, SubmittedAt=x.SubmittedAt,
-        Documents=x.Documents.Where(d=>!d.IsDeleted).Select(d=>new DemandApplicationDocumentDto { Id=d.Id, DocumentType=d.DocumentType, FileName=d.FileName, ContentType=d.ContentType, FileSizeBytes=d.FileSizeBytes, UploadedAt=d.CreatedAt }).ToList()
+        Documents=x.Documents.Where(d=>!d.IsDeleted).Select(d=>new DemandApplicationDocumentDto { Id=d.Id, DocumentType=d.DocumentType, FileName=d.FileName, ContentType=d.ContentType, FileSizeBytes=d.FileSizeBytes, UploadedAt=d.CreatedAt, VerificationStatus=d.VerificationStatus, RequestRemark=d.RequestRemark, RequestedAt=d.RequestedAt, RespondedAt=d.RespondedAt }).ToList()
     };
+    private static DemandApplicationDto ToPublicDto(DemandApplication x)
+    {
+        var dto = ToDto(x);
+        dto.Documents = dto.Documents.Where(d => !string.Equals(d.DocumentType, "SiteInspectionPhoto", StringComparison.Ordinal)).ToList();
+        return dto;
+    }
 
     public async Task<List<DemandApplicationDto>> GetAllAsync()
     {
@@ -80,12 +89,12 @@ public class DemandApplicationService : IDemandApplicationService
         _db.DemandApplications.Add(x);
         await _db.SaveChangesAsync();
         await _audit.LogAsync("Create", nameof(DemandApplication), x.Id);
-        return new PublicDemandApplicationSessionDto { Application = ToDto(x), AccessToken = accessToken };
+        return new PublicDemandApplicationSessionDto { Application = ToPublicDto(x), AccessToken = accessToken };
     }
     public async Task<DemandApplicationDto?> GetPublicAsync(int id, string? accessToken)
     {
         var x = await GetPublicEntityAsync(id, accessToken, includeDocuments: true);
-        return x is null ? null : ToDto(x);
+        return x is null ? null : ToPublicDto(x);
     }
     public async Task<DemandApplicationDto?> UpdatePublicAsync(int id, UpdateDemandApplicationDto dto, string? accessToken)
     {
@@ -94,7 +103,7 @@ public class DemandApplicationService : IDemandApplicationService
         if (x is null || x.SubmittedAt is not null) return null;
         Map(x, dto); x.UpdatedBy = "Applicant"; x.UpdatedAt = DateTime.UtcNow;
         await _db.SaveChangesAsync(); await _audit.LogAsync("Update", nameof(DemandApplication), id);
-        return ToDto(x);
+        return ToPublicDto(x);
     }
     public async Task<DemandApplicationDto?> SubmitPublicAsync(int id, string? accessToken)
     {
@@ -104,7 +113,7 @@ public class DemandApplicationService : IDemandApplicationService
         var number = ""; do { number = $"2026{Random.Shared.Next(0,10000):0000}"; } while (await _db.DemandApplications.AnyAsync(a => a.ApplicationNumber == number && a.Id != id));
         x.ApplicationNumber = number; x.Status = DemandApplicationStatus.Submitted; x.SubmittedAt = DateTime.UtcNow; x.UpdatedBy = "Applicant"; x.UpdatedAt = DateTime.UtcNow;
         await _db.SaveChangesAsync(); await _audit.LogAsync("Final Submission", nameof(DemandApplication), id);
-        return ToDto(x);
+        return ToPublicDto(x);
     }
     public async Task<DemandApplicationDocumentDto?> AddPublicDocumentAsync(int id, string type, Stream stream, string fileName, string contentType, string? accessToken)
     {
@@ -122,12 +131,51 @@ public class DemandApplicationService : IDemandApplicationService
     {
         var x = await GetPublicEntityAsync(id, accessToken);
         if (x is null) return null;
-        return await _db.DemandApplicationDocuments.AsNoTracking().FirstOrDefaultAsync(d => d.Id == documentId && d.DemandApplicationId == id && !d.IsDeleted);
+        return await _db.DemandApplicationDocuments.AsNoTracking().FirstOrDefaultAsync(d => d.Id == documentId && d.DemandApplicationId == id && d.DocumentType != "SiteInspectionPhoto" && !d.IsDeleted);
+    }
+    public async Task<DemandApplicationDocumentDto?> ResubmitPublicDocumentAsync(int id, int documentId, Stream stream, string fileName, string contentType, string? requestToken)
+    {
+        var request = await _db.DemandApplicationDocuments.FirstOrDefaultAsync(d => d.Id == documentId && d.DemandApplicationId == id && !d.IsDeleted);
+        if (request is null || request.VerificationStatus != "Requested" || request.RequestTokenConsumedAt is not null || string.IsNullOrWhiteSpace(requestToken) || !TokenMatches(request.RequestTokenHash, requestToken) || !IsValidApplicantPdf(fileName, contentType, stream.Length)) return null;
+        request.VerificationStatus = "Responded"; request.RespondedAt = DateTime.UtcNow; request.RequestTokenConsumedAt = DateTime.UtcNow;
+        var saved = await _storage.SaveFileAsync(stream, fileName, contentType, "demandapplications");
+        var replacement = new DemandApplicationDocument { DemandApplicationId=id, DocumentType=request.DocumentType, FileName=fileName, StoredFileName=saved.storedFileName, FilePath=saved.filePath, ContentType=saved.contentType, FileSizeBytes=saved.size, VerificationStatus="Unchecked", CreatedBy="Applicant" };
+        _db.DemandApplicationDocuments.Add(replacement); await _db.SaveChangesAsync(); await _audit.LogAsync("Applicant resubmitted requested document", nameof(DemandApplication), id, null, null, request.DocumentType);
+        return new DemandApplicationDocumentDto { Id=replacement.Id, DocumentType=replacement.DocumentType, FileName=replacement.FileName, ContentType=replacement.ContentType, FileSizeBytes=replacement.FileSizeBytes, UploadedAt=replacement.CreatedAt, VerificationStatus=replacement.VerificationStatus };
     }
     public async Task<bool> UpdateAsync(int id, UpdateDemandApplicationDto dto, string userName) { Validate(dto); var x=await _db.DemandApplications.FirstOrDefaultAsync(x=>x.Id==id&&!x.IsDeleted); if(x is null)return false; Map(x,dto); x.UpdatedBy=userName; x.UpdatedAt=DateTime.UtcNow; await _db.SaveChangesAsync(); await _audit.LogAsync("Update",nameof(DemandApplication),id); return true; }
     public async Task<bool> DeleteAsync(int id,string userName){var x=await _db.DemandApplications.FirstOrDefaultAsync(x=>x.Id==id&&!x.IsDeleted);if(x is null)return false;x.IsDeleted=true;x.DeletedBy=userName;x.DeletedAt=DateTime.UtcNow;await _db.SaveChangesAsync();await _audit.LogAsync("Delete",nameof(DemandApplication),id);return true;}
     public async Task<DemandApplicationDto?> SubmitAsync(int id,string userName){var x=await _db.DemandApplications.Include(x=>x.Documents).FirstOrDefaultAsync(x=>x.Id==id&&!x.IsDeleted);if(x is null)return null;if(!x.DeclarationAccepted)throw new InvalidOperationException("घोषणा स्वीकारणे आवश्यक आहे.");var number="";do{number=$"2026{Random.Shared.Next(0,10000):0000}";}while(await _db.DemandApplications.AnyAsync(a=>a.ApplicationNumber==number&&a.Id!=id));x.ApplicationNumber=number;x.Status=DemandApplicationStatus.Submitted;x.SubmittedAt=DateTime.UtcNow;x.UpdatedBy=userName;x.UpdatedAt=DateTime.UtcNow;await _db.SaveChangesAsync();await _audit.LogAsync("Final Submission",nameof(DemandApplication),id);return ToDto(x);}
-    public async Task<DemandApplicationDocumentDto> AddDocumentAsync(int id,string type,Stream stream,string fileName,string contentType,string userName){var x=await _db.DemandApplications.FirstOrDefaultAsync(x=>x.Id==id&&!x.IsDeleted)??throw new InvalidOperationException("अर्ज सापडला नाही.");if(!_storage.IsAllowedFile(fileName,stream.Length))throw new InvalidOperationException("फक्त PDF/JPG/PNG/DOC/DOCX/XLSX फाईल (कमाल 10MB) परवानगी आहे.");var previous=await _db.DemandApplicationDocuments.Where(d=>d.DemandApplicationId==id&&d.DocumentType==type&&!d.IsDeleted).ToListAsync();foreach(var old in previous){old.IsDeleted=true;old.DeletedBy=userName;old.DeletedAt=DateTime.UtcNow;_storage.DeleteFile(old.FilePath);}var saved=await _storage.SaveFileAsync(stream,fileName,contentType,"demandapplications");var d=new DemandApplicationDocument{DemandApplicationId=x.Id,DocumentType=type,FileName=fileName,StoredFileName=saved.storedFileName,FilePath=saved.filePath,ContentType=saved.contentType,FileSizeBytes=saved.size,CreatedBy=userName};_db.DemandApplicationDocuments.Add(d);await _db.SaveChangesAsync();await _audit.LogAsync(previous.Count>0?"Document Replace":"Document Upload",nameof(DemandApplication),id,null,null,type);return new DemandApplicationDocumentDto{Id=d.Id,DocumentType=d.DocumentType,FileName=d.FileName,ContentType=d.ContentType,FileSizeBytes=d.FileSizeBytes,UploadedAt=d.CreatedAt};}
+    public async Task<DemandApplicationDocumentDto> AddDocumentAsync(int id,string type,Stream stream,string fileName,string contentType,string userName){var x=await _db.DemandApplications.FirstOrDefaultAsync(x=>x.Id==id&&!x.IsDeleted)??throw new InvalidOperationException("अर्ज सापडला नाही.");if(!IsValidApplicantPdf(fileName,contentType,stream.Length))throw new InvalidOperationException("फक्त PDF स्वरूपातील कागदपत्र (कमाल 20 MB) परवानगी आहे.");var previous=await _db.DemandApplicationDocuments.Where(d=>d.DemandApplicationId==id&&d.DocumentType==type&&!d.IsDeleted).ToListAsync();foreach(var old in previous){old.IsDeleted=true;old.DeletedBy=userName;old.DeletedAt=DateTime.UtcNow;_storage.DeleteFile(old.FilePath);}var saved=await _storage.SaveFileAsync(stream,fileName,contentType,"demandapplications");var d=new DemandApplicationDocument{DemandApplicationId=x.Id,DocumentType=type,FileName=fileName,StoredFileName=saved.storedFileName,FilePath=saved.filePath,ContentType=saved.contentType,FileSizeBytes=saved.size,CreatedBy=userName};_db.DemandApplicationDocuments.Add(d);await _db.SaveChangesAsync();await _audit.LogAsync(previous.Count>0?"Document Replace":"Document Upload",nameof(DemandApplication),id,null,null,type);return new DemandApplicationDocumentDto{Id=d.Id,DocumentType=d.DocumentType,FileName=d.FileName,ContentType=d.ContentType,FileSizeBytes=d.FileSizeBytes,UploadedAt=d.CreatedAt};}
+    public async Task<DemandApplicationDocumentDto> SetDocumentVerificationAsync(int applicationId, int documentId, string status, string userName, string? remark = null)
+    {
+        if (status is not ("Checked" or "Unchecked" or "Requested")) throw new InvalidOperationException("अवैध कागदपत्र स्थिती.");
+        var document = await _db.DemandApplicationDocuments.FirstOrDefaultAsync(d => d.Id == documentId && d.DemandApplicationId == applicationId && !d.IsDeleted) ?? throw new InvalidOperationException("कागदपत्र सापडले नाही.");
+        if (status == "Requested" && (string.IsNullOrWhiteSpace(remark) || document.VerificationStatus == "Requested")) throw new InvalidOperationException("विनंती शेरा आवश्यक आहे किंवा विनंती आधीच प्रलंबित आहे.");
+        string? requestToken = null;
+        if (status == "Requested") { requestToken = Convert.ToHexString(RandomNumberGenerator.GetBytes(32)); document.RequestTokenHash = HashToken(requestToken); document.RequestTokenCreatedAt = DateTime.UtcNow; document.RequestTokenConsumedAt = null; }
+        document.VerificationStatus=status; document.RequestRemark=status=="Requested" ? remark.Trim() : null; document.RequestedAt=status=="Requested" ? DateTime.UtcNow : null; document.RequestedBy=status=="Requested" ? userName : null;
+        await _db.SaveChangesAsync(); await _audit.LogAsync(status=="Requested" ? "OS requested document" : "OS verified document", nameof(DemandApplication), applicationId, null, null, document.DocumentType);
+        return new DemandApplicationDocumentDto { Id=document.Id, DocumentType=document.DocumentType, FileName=document.FileName, ContentType=document.ContentType, FileSizeBytes=document.FileSizeBytes, UploadedAt=document.CreatedAt, VerificationStatus=document.VerificationStatus, RequestRemark=document.RequestRemark, RequestedAt=document.RequestedAt, RespondedAt=document.RespondedAt, RequestToken=requestToken };
+    }
+    public async Task<DemandApplicationDocumentDto> AddSiteInspectionPhotoAsync(int id, Stream stream, string fileName, string contentType, string userName)
+    {
+        var application = await _db.DemandApplications.FirstOrDefaultAsync(x => x.Id == id && !x.IsDeleted) ?? throw new InvalidOperationException("अर्ज सापडला नाही.");
+        var workflow = await _db.DemandApplicationWorkflows.FirstOrDefaultAsync(x => x.DemandApplicationId == id);
+        if (workflow is null || !new[] { "OSPending", "PaymentRequired", "PaymentVerificationPending" }.Contains(workflow.Stage))
+            throw new InvalidOperationException("या टप्प्यावर प्रत्यक्ष जागेचा फोटो बदलता येत नाही.");
+        if (!IsValidSitePhoto(fileName, contentType, stream.Length)) throw new InvalidOperationException("फक्त JPG किंवा PNG प्रतिमा (कमाल 10 MB) परवानगी आहे.");
+        var previous = await _db.DemandApplicationDocuments.Where(d => d.DemandApplicationId == id && d.DocumentType == "SiteInspectionPhoto" && !d.IsDeleted).ToListAsync();
+        foreach (var old in previous) { old.IsDeleted = true; old.DeletedBy = userName; old.DeletedAt = DateTime.UtcNow; _storage.DeleteFile(old.FilePath); }
+        var saved = await _storage.SaveFileAsync(stream, fileName, contentType, "siteinspection");
+        var photo = new DemandApplicationDocument { DemandApplicationId = application.Id, DocumentType = "SiteInspectionPhoto", FileName = fileName, StoredFileName = saved.storedFileName, FilePath = saved.filePath, ContentType = saved.contentType, FileSizeBytes = saved.size, CreatedBy = userName };
+        _db.DemandApplicationDocuments.Add(photo);
+        await _db.SaveChangesAsync();
+        await _audit.LogAsync(previous.Count > 0 ? "Site inspection photo replaced" : "Site inspection photo uploaded", nameof(DemandApplication), id);
+        return new DemandApplicationDocumentDto { Id = photo.Id, DocumentType = photo.DocumentType, FileName = photo.FileName, ContentType = photo.ContentType, FileSizeBytes = photo.FileSizeBytes, UploadedAt = photo.CreatedAt };
+    }
+    private static bool IsValidApplicantPdf(string fileName, string contentType, long length) => length is > 0 and <= 20 * 1024 * 1024 && fileName.EndsWith(".pdf", StringComparison.OrdinalIgnoreCase) && string.Equals(contentType, "application/pdf", StringComparison.OrdinalIgnoreCase);
+    private static bool IsValidSitePhoto(string fileName, string contentType, long length) => length is > 0 and <= 10 * 1024 * 1024 && (fileName.EndsWith(".jpg", StringComparison.OrdinalIgnoreCase) || fileName.EndsWith(".jpeg", StringComparison.OrdinalIgnoreCase) || fileName.EndsWith(".png", StringComparison.OrdinalIgnoreCase)) && (string.Equals(contentType, "image/jpeg", StringComparison.OrdinalIgnoreCase) || string.Equals(contentType, "image/png", StringComparison.OrdinalIgnoreCase));
     public async Task<bool> DeleteDocumentAsync(int id,int documentId,string userName){var d=await _db.DemandApplicationDocuments.FirstOrDefaultAsync(x=>x.Id==documentId&&x.DemandApplicationId==id&&!x.IsDeleted);if(d is null)return false;d.IsDeleted=true;d.DeletedBy=userName;d.DeletedAt=DateTime.UtcNow;await _db.SaveChangesAsync();_storage.DeleteFile(d.FilePath);await _audit.LogAsync("Document Delete",nameof(DemandApplication),id,null,null,d.FileName);return true;}
     public async Task<DemandApplicationDocument?> GetDocumentAsync(int documentId)=>await _db.DemandApplicationDocuments.AsNoTracking().FirstOrDefaultAsync(x=>x.Id==documentId&&!x.IsDeleted);
     private async Task<DemandApplication?> GetPublicEntityAsync(int id, string? accessToken, bool includeDocuments = false)
@@ -146,7 +194,7 @@ public class DemandApplicationService : IDemandApplicationService
         var actual = SHA256.HashData(Encoding.UTF8.GetBytes(suppliedToken));
         return CryptographicOperations.FixedTimeEquals(expected, actual);
     }
-    private static DemandApplication Map(DemandApplication x,CreateDemandApplicationDto d){x.ServiceType=d.ServiceType;x.BusinessType=d.BusinessType;x.OtherBusinessType=(d.OtherBusinessType??string.Empty).Trim();x.ApplicantType=d.ApplicantType;x.ApplicantName=(d.ApplicantName??string.Empty).Trim();x.Mobile=d.Mobile;x.Email=(d.Email??string.Empty).Trim();x.IdentityNumber=(d.IdentityNumber??string.Empty).Trim();x.PanNumber=(d.PanNumber??string.Empty).Trim();x.GstNumber=(d.GstNumber??string.Empty).Trim();x.PermanentAddress=d.PermanentAddress;x.CorrespondenceAddress=d.SameAddress?d.PermanentAddress:d.CorrespondenceAddress;x.SameAddress=d.SameAddress;x.State=d.State;x.District=d.District;x.City=d.City;x.Taluka=d.Taluka;x.PinCode=d.PinCode;x.Prabhag=d.Prabhag;x.Location=d.Location??string.Empty;x.AvailableSpace=d.AvailableSpace??string.Empty;x.AreaSqFt=d.AreaSqFt;x.ServiceDescription=d.ServiceDescription;x.SpaceRequirement=d.SpaceRequirement;x.OtherInformation=d.OtherInformation;x.StartDate=d.StartDate;x.EndDate=d.EndDate;x.RequiredDuration=d.RequiredDuration;x.ElectricityRequired=d.ElectricityRequired;x.WaterRequired=d.WaterRequired;x.OtherFacilities=d.OtherFacilities;x.WasteManagement=d.WasteManagement;x.DeclarationAccepted=d.DeclarationAccepted;return x;}
+    private static DemandApplication Map(DemandApplication x,CreateDemandApplicationDto d){x.ServiceType=d.ServiceType;x.BusinessType=d.BusinessType;x.OtherBusinessType=(d.OtherBusinessType??string.Empty).Trim();x.ApplicantType=d.ApplicantType;x.ApplicantName=(d.ApplicantName??string.Empty).Trim();x.Mobile=d.Mobile;x.Email=(d.Email??string.Empty).Trim();x.IdentityNumber=(d.IdentityNumber??string.Empty).Trim();x.PanNumber=(d.PanNumber??string.Empty).Trim();x.GstNumber=(d.GstNumber??string.Empty).Trim();x.PermanentAddress=d.PermanentAddress;x.CorrespondenceAddress=d.SameAddress?d.PermanentAddress:d.CorrespondenceAddress;x.SameAddress=d.SameAddress;x.State=d.State;x.District=d.District;x.City=d.City;x.Taluka=d.Taluka;x.PinCode=d.PinCode;x.Prabhag=d.Prabhag;x.Location=d.Location??string.Empty;x.AvailableSpace=d.AvailableSpace??string.Empty;if(d.LengthFt is > 0 && d.WidthFt is > 0){var area=decimal.Round(d.LengthFt.Value*d.WidthFt.Value,2,MidpointRounding.AwayFromZero);x.LengthFt=d.LengthFt;x.WidthFt=d.WidthFt;x.AreaSqFt=area;x.CalculatedRate=area;}else{x.LengthFt=null;x.WidthFt=null;x.AreaSqFt=d.AreaSqFt;x.CalculatedRate=d.CalculatedRate;}x.ServiceDescription=d.ServiceDescription;x.SpaceRequirement=d.SpaceRequirement;x.OtherInformation=d.OtherInformation;x.StartDate=d.StartDate;x.EndDate=d.EndDate;x.RequiredDuration=d.RequiredDuration;x.ElectricityRequired=d.ElectricityRequired;x.WaterRequired=d.WaterRequired;x.OtherFacilities=d.OtherFacilities;x.WasteManagement=d.WasteManagement;x.DeclarationAccepted=d.DeclarationAccepted;return x;}
     private static void Validate(CreateDemandApplicationDto d)
     {
         // ===== STEP 1: SERVICE INFORMATION =====
@@ -244,6 +292,10 @@ public class DemandApplicationService : IDemandApplicationService
             throw new InvalidOperationException("आवश्यक कालावधी निवडलेल्या तारखांशी जुळत नाही.");
         
         // Numeric validations
+        if (d.LengthFt.HasValue || d.WidthFt.HasValue)
+        {
+            if (d.LengthFt is not > 0 || d.WidthFt is not > 0) throw new InvalidOperationException("लांबी आणि रुंदी शून्यापेक्षा जास्त असणे आवश्यक आहे.");
+        }
         if (d.AreaSqFt is < 0)
             throw new InvalidOperationException("क्षेत्रफळ ऋण असू शकत नाही.");
     }

@@ -21,6 +21,8 @@ export default function NextLayout({ children }) {
   const { user, logout } = useAuth()
   const router = useRouter()
   const pathname = usePathname()
+  const isPublicApplicantPage = pathname === "/demand-application" || pathname === "/application-status"
+  const visibleMenu = isPublicApplicantPage ? menu.filter((item) => item.to === "/") : menu
 
   const doLogout = () => {
     logout()
@@ -38,8 +40,8 @@ export default function NextLayout({ children }) {
           </div>
         </Link>
         <nav className="sidebar-nav">
-          {menu.map((item) => (
-            <Link key={item.to} href={item.to} target="_blank" rel="noopener noreferrer" className={`nav-item${pathname === item.to ? " active" : ""}`}>
+          {visibleMenu.map((item) => (
+            <Link key={item.to} href={item.to} className={`nav-item${pathname === item.to ? " active" : ""}`}>
               <span className="nav-icon">{item.icon}</span> {item.label}
             </Link>
           ))}
@@ -50,10 +52,10 @@ export default function NextLayout({ children }) {
           <div className="topbar-title">भूमी व मालमत्ता व्यवस्थापन प्रणाली</div>
           <div className="topbar-user">
             {user ? <><div className="user-badge">
-              <div className="user-name">{user.fullName}</div>
-              <div className="user-role">{user.role === "Admin" ? "प्रशासक" : ["JE", "OS", "AssistantCommissioner", "Officer"].includes(user.role) ? "अधिकारी" : "कर्मचारी"}</div>
+              <div className="user-name">{user.fullName || user.username}</div>
+              <div className="user-role">{user.role}</div>
             </div>
-            <button className="btn btn-outline" onClick={doLogout}>लॉगआऊट</button></> : (pathname === "/" || pathname === "/demand-application") ? <Link className="btn btn-outline" href="/officer-login" target="_blank" rel="noopener noreferrer">अधिकारी Login</Link> : null}
+            <button className="btn btn-outline" onClick={doLogout}>लॉगआऊट</button></> : (pathname === "/" || isPublicApplicantPage) ? <Link className="btn btn-outline" href="/officer-login" target="_blank" rel="noopener noreferrer">अधिकारी Login</Link> : null}
           </div>
         </header>
         <main className="content-area">{children}</main>

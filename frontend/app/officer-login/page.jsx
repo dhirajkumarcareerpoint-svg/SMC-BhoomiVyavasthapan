@@ -3,5 +3,5 @@
 import NextLogin from "../../src/next/NextLogin"
 
 export default function OfficerLoginPage() {
-  return <NextLogin />
+  return <NextLogin heading="अधिकारी लॉगिन" officerLogin />
 }

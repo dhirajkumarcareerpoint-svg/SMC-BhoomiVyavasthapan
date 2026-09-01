@@ -32,6 +32,9 @@ public class DemandApplication : BaseEntity
     public string Location { get; set; } = string.Empty;
     public string AvailableSpace { get; set; } = string.Empty;
     public decimal? AreaSqFt { get; set; }
+    public decimal? LengthFt { get; set; }
+    public decimal? WidthFt { get; set; }
+    public decimal? CalculatedRate { get; set; }
     public string ServiceDescription { get; set; } = string.Empty;
     public string SpaceRequirement { get; set; } = string.Empty;
     public string OtherInformation { get; set; } = string.Empty;
@@ -61,4 +64,12 @@ public class DemandApplicationDocument : BaseEntity
     public string FilePath { get; set; } = string.Empty;
     public string ContentType { get; set; } = string.Empty;
     public long FileSizeBytes { get; set; }
+    public string VerificationStatus { get; set; } = "Unchecked";
+    public string? RequestRemark { get; set; }
+    public DateTime? RequestedAt { get; set; }
+    public string? RequestedBy { get; set; }
+    public DateTime? RespondedAt { get; set; }
+    public string? RequestTokenHash { get; set; }
+    public DateTime? RequestTokenCreatedAt { get; set; }
+    public DateTime? RequestTokenConsumedAt { get; set; }
 }

@@ -1,6 +1,7 @@
 "use client"
 
 import { useEffect, useState } from "react"
+import Link from "next/link"
 import { useRouter } from "next/navigation"
 import { useAuth } from "../context/AuthContext"
 
@@ -23,7 +24,7 @@ const requestedModuleLabels = {
   "/schemes": "विविध उपक्रम",
 }
 
-export default function NextLogin({ managementOnly = false }) {
+export default function NextLogin({ managementOnly = false, heading = "", officerLogin = false }) {
   const { login, logout } = useAuth()
   const router = useRouter()
   const [requestedPath, setRequestedPath] = useState("")
@@ -72,9 +73,25 @@ export default function NextLogin({ managementOnly = false }) {
   }
 
   return (
-    <div className="login-page">
+    <div className={`login-page${officerLogin ? " officer-login-page" : ""}`}>
+      {officerLogin && (
+        <aside className="sidebar officer-login-sidebar">
+          <Link href="/" className="sidebar-brand" aria-label="मुखपृष्ठावर जा">
+            <div className="brand-emblem">सो</div>
+            <div>
+              <div className="brand-title">सोलापूर महानगरपालिका</div>
+              <div className="brand-subtitle">भूमी व मालमत्ता व्यवस्थापन</div>
+            </div>
+          </Link>
+          <nav className="sidebar-nav">
+            <Link className="nav-item active" href="/">
+              <span className="nav-icon">🏠</span> मुखपृष्ठ
+            </Link>
+          </nav>
+        </aside>
+      )}
       <div className="login-stack">
-      {requestedModuleLabel && <div className="login-requested-module">{requestedModuleLabel}</div>}
+      {(heading || requestedModuleLabel) && <div className="login-requested-module">{heading || requestedModuleLabel}</div>}
       <div className="login-card">
         <div className="login-emblem">सो</div>
         <div className="login-title">सोलापूर महानगरपालिका</div>

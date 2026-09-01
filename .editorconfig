@@ -1,0 +1,4 @@
+root = true
+
+[frontend/**/*.{js,jsx,mjs,css,json}]
+charset = utf-8

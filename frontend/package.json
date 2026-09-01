@@ -4,8 +4,9 @@
   "version": "1.0.0",
   "type": "module",
   "scripts": {
+    "check:utf8": "node scripts/check-utf8.mjs",
     "dev": "next dev -p 3000",
-    "build": "next build",
+    "build": "npm run check:utf8 && next build",
     "start": "next start -p 3000"
   },
   "dependencies": {

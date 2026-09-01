@@ -96,6 +96,10 @@ const getEmailError = (value) => {
 const initialForm = {
   serviceType: "",
   businessType: "",
+  lengthFt: "",
+  widthFt: "",
+  areaSqFt: "",
+  calculatedRate: "",
   otherBusinessType: "",
   applicantType: "Individual",
   applicantName: "",
@@ -186,10 +190,12 @@ export default function DemandApplicationPage() {
   const [message, setMessage] = useState("");
   const [saving, setSaving] = useState(false);
   const [submitting, setSubmitting] = useState(false);
+  const [uploading, setUploading] = useState(false);
   const [submissionSuccess, setSubmissionSuccess] = useState(null);
   const [temporaryApplication, setTemporaryApplication] = useState(null);
   const [applicantAccessToken, setApplicantAccessToken] = useState("");
   const saveInFlight = useRef(false);
+  const uploadInFlight = useRef(false);
   // All authenticated staff roles are officer sessions. The explicit applicant
   // roles remain available for a future applicant-authenticated flow.
   const isOfficerSession = Boolean(user) && !["Applicant", "Citizen", "Public"].includes(user.role);
@@ -215,7 +221,17 @@ export default function DemandApplicationPage() {
     if (Object.prototype.hasOwnProperty.call(fixedAddressValues, name)) {
       value = fixedAddressValues[name];
     }
-    setForm((previous) => ({ ...previous, [name]: value }));
+    setForm((previous) => {
+      const next = { ...previous, [name]: value };
+      if (name === "lengthFt" || name === "widthFt") {
+        const length = Number(name === "lengthFt" ? value : previous.lengthFt);
+        const width = Number(name === "widthFt" ? value : previous.widthFt);
+        const calculated = Number.isFinite(length) && Number.isFinite(width) && length > 0 && width > 0 ? Math.round(length * width * 100) / 100 : "";
+        next.areaSqFt = calculated;
+        next.calculatedRate = calculated;
+      }
+      return next;
+    });
     if (name === "email") {
       const error = getEmailError(value);
       setErrors((previous) => {
@@ -451,7 +467,7 @@ export default function DemandApplicationPage() {
     setSubmitting(submit);
     setMessage("");
     try {
-      const { location, availableSpace, areaSqFt, feeAmount, ...application } = form;
+      const { location, availableSpace, feeAmount, ...application } = form;
       const payload = {
         ...application,
         state: "Maharashtra",
@@ -548,8 +564,32 @@ export default function DemandApplicationPage() {
     setMessage("");
     setStep(1);
   };
+  const createDraftForDocumentUpload = async () => {
+    if (current) return { application: current, accessToken: applicantAccessToken };
+    if (!validate()) throw new Error("Complete required fields before uploading a document.");
+
+    const { location, availableSpace, feeAmount, ...application } = form;
+    const payload = {
+      ...application,
+      state: "Maharashtra",
+      district: "Solapur",
+      city: "Solapur",
+      serviceType: Number(form.serviceType),
+      businessType: form.businessType ? Number(form.businessType) : null,
+      feeAmount: feeAmount === "" ? null : Number(feeAmount),
+    };
+    const response = await client.post(
+      isOfficerSession ? "/demand-applications" : "/demand-applications/public",
+      payload,
+    );
+    const saved = isOfficerSession ? response.data.data : response.data.data.application;
+    const accessToken = isOfficerSession ? "" : response.data.data.accessToken;
+    if (!isOfficerSession) setApplicantAccessToken(accessToken);
+    setCurrent(saved);
+    return { application: saved, accessToken };
+  };
   const edit = (item) => {
-    const { location, availableSpace, areaSqFt, ...editableItem } = item;
+    const { location, availableSpace, ...editableItem } = item;
     setForm({
       ...initialForm,
       ...editableItem,
@@ -565,16 +605,33 @@ export default function DemandApplicationPage() {
     setStep(1);
   };
   const upload = async (event) => {
-    const file = event.target.files?.[0];
-    if (!file || !current) return;
+    const input = event.currentTarget;
+    const file = input.files?.[0];
+    if (!file || uploadInFlight.current) return;
+    const extension = file.name.split(".").pop()?.toLowerCase();
+    if (extension !== "pdf" || (file.type && file.type !== "application/pdf")) {
+      setMessage("फक्त PDF स्वरूपातील कागदपत्र अपलोड करा.");
+      input.value = "";
+      return;
+    }
+    if (file.size > 20 * 1024 * 1024) {
+      setMessage("कागदपत्राचा आकार 20 MB पेक्षा जास्त असू शकत नाही.");
+      input.value = "";
+      return;
+    }
+
+    uploadInFlight.current = true;
+    setUploading(true);
+    setMessage(`फाईल निवडली: ${file.name}`);
     const data = new FormData();
-    data.append("documentType", event.target.dataset.type || "इतर कागदपत्र");
+    data.append("documentType", input.dataset.type || "इतर कागदपत्र");
     data.append("file", file);
     try {
+      const draft = await createDraftForDocumentUpload();
       const response = await client.post(
-        isOfficerSession ? `/demand-applications/${current.id}/documents` : `/demand-applications/public/${current.id}/documents`,
+        isOfficerSession ? `/demand-applications/${draft.application.id}/documents` : `/demand-applications/public/${draft.application.id}/documents`,
         data,
-        isOfficerSession ? undefined : { headers: { "X-Demand-Application-Token": applicantAccessToken } },
+        isOfficerSession ? undefined : { headers: { "X-Demand-Application-Token": draft.accessToken } },
       );
       setCurrent((previous) => ({
         ...previous,
@@ -588,10 +645,13 @@ export default function DemandApplicationPage() {
       setMessage("कागदपत्र यशस्वीरित्या अपलोड झाले.");
     } catch (error) {
       setMessage(
-        error.response?.data?.messageMr || "कागदपत्र अपलोड करता आले नाही.",
+        error.response?.data?.messageMr || error.message || "कागदपत्र अपलोड करता आले नाही.",
       );
+    } finally {
+      uploadInFlight.current = false;
+      setUploading(false);
+      input.value = "";
     }
-    event.target.value = "";
   };
   const downloadDocument = async (fileDoc) => {
     const response = await client.get(
@@ -605,7 +665,24 @@ export default function DemandApplicationPage() {
     link.click();
     window.URL.revokeObjectURL(url);
   };
-  const downloadApplication = async (application) => {
+  const downloadApplication = async (application, accessToken = applicantAccessToken) => {
+    const response = await client.get(
+      isOfficerSession
+        ? `/demand-workflow/${application.id}/application-pdf`
+        : `/demand-applications/public/${application.id}/application-pdf`,
+      isOfficerSession
+        ? { responseType: "blob" }
+        : { responseType: "blob", headers: { "X-Demand-Application-Token": accessToken } },
+    );
+    const downloadUrl = window.URL.createObjectURL(response.data);
+    const link = document.createElement("a");
+    link.href = downloadUrl;
+    link.download = `Demand-Application-${application.applicationNumber || application.id}.pdf`;
+    document.body.appendChild(link);
+    link.click();
+    link.remove();
+    window.setTimeout(() => window.URL.revokeObjectURL(downloadUrl), 1000);
+    return;
     const html2pdf = (await import("html2pdf.js")).default;
     const serviceLabel =
       serviceTypes.find((item) => item.value === Number(application.serviceType))
@@ -616,15 +693,17 @@ export default function DemandApplicationPage() {
     const statusLabel = statusLabels[application.status] || application.status || "-";
     const value = (field) => application[field] || "-";
     const display = (field) => Object.prototype.hasOwnProperty.call(application, field) ? value(field) : field || "-";
-    const section = (title, rows) => `<section class="pdf-section"><h2>${title}</h2><div class="pdf-grid">${rows.map(([label, field]) => `<div class="pdf-label">${label}</div><div class="pdf-value">${display(field)}</div>`).join("")}</div></section>`;
+    const sectionHeadings = { "सेवेची माहिती": "मागणीची माहिती", "पत्ता / सेवा माहिती": "अर्जदाराची माहिती", "कालावधी / सुविधा / आवश्यकता": "मागणीची माहिती", "अर्जाची स्थिती": "मागणीची माहिती" };
+    const section = (title, rows) => `<section class="pdf-section"><h2>${sectionHeadings[title] || title}</h2><div class="pdf-grid">${rows.map(([label, field]) => `<div class="pdf-label">${label}</div><div class="pdf-value">${display(field)}</div>`).join("")}</div></section>`;
     const documents = application.documents?.length
       ? application.documents.map((item) => `<li>${item.documentType || "कागदपत्र"}: ${item.fileName || "-"}</li>`).join("")
       : "<li>-</li>";
     const node = document.createElement("div");
-    // html2canvas cannot reliably paint content placed behind the document at a
-    // negative z-index. Keep the print surface off-screen, but above the page.
-    node.style.cssText = "position:fixed;left:-10000px;top:0;width:794px;background:#fff;z-index:2147483647;pointer-events:none";
-    node.innerHTML = `<div style="font-family:'Noto Sans Devanagari','Segoe UI',sans-serif;color:#1e293b;padding:34px 42px;font-size:12px;line-height:1.55"><header style="text-align:center;border-bottom:3px solid #0b3d91;padding-bottom:14px;margin-bottom:18px"><div style="font-size:21px;font-weight:700;color:#0b3d91">सोलापूर महानगरपालिका</div><div style="font-size:14px;color:#475569">भूमी व मालमत्ता व्यवस्थापन प्रणाली</div><div style="font-size:19px;font-weight:700;color:#0b3d91;margin-top:12px">मागणी अर्ज</div><div style="display:inline-block;margin-top:10px;padding:7px 16px;border:1px solid #0b3d91;font-weight:700;color:#0b3d91">अर्ज क्रमांक: ${value("applicationNumber")}</div></header>${section("सेवेची माहिती", [["सेवेचा प्रकार", serviceLabel], ["व्यवसायाचा प्रकार", businessLabel], ["इतर व्यवसायाचा प्रकार", "otherBusinessType"]])}${section("अर्जदाराची माहिती", [["अर्ज दिनांक", application.createdAt ? new Date(application.createdAt).toLocaleDateString("mr-IN") : "-"], ["अर्जदाराचा प्रकार", value("applicantType")], ["अर्जदाराचे पूर्ण नाव", "applicantName"], ["मोबाईल क्रमांक", "mobile"], ["ई-मेल आयडी", "email"], ["आधार/ओळखपत्र क्रमांक", "identityNumber"], ["PAN क्रमांक", "panNumber"], ["GST क्रमांक", "gstNumber"]])}${section("पत्ता / सेवा माहिती", [["कायमचा पत्ता", "permanentAddress"], ["पत्रव्यवहाराचा पत्ता", "correspondenceAddress"], ["राज्य", "state"], ["जिल्हा", "district"], ["शहर", "city"], ["तालुका", "taluka"], ["पिनकोड", "pinCode"], ["प्रभाग", "prabhag"]])}${section("कालावधी / सुविधा / आवश्यकता", [["सेवा/विक्रीचा प्रकार", "serviceDescription"], ["स्टॉल/जागेची आवश्यकता (क्षेत्रफळामध्ये)", "spaceRequirement"], ["इतर आवश्यक माहिती", "otherInformation"], ["प्रारंभ तारीख", "startDate"], ["समाप्ती तारीख", "endDate"], ["आवश्यक कालावधी (दिवस)", "requiredDuration"], ["वीज सुविधा", application.electricityRequired ? "होय" : "नाही"], ["पाणी सुविधा", application.waterRequired ? "होय" : "नाही"], ["इतर आवश्यक सुविधा", "otherFacilities"], ["कचरा व्यवस्थापन / संबंधित आवश्यकता", "wasteManagement"]])}<section class="pdf-section"><h2>कागदपत्रे</h2><ul>${documents}</ul></section><section class="pdf-section"><h2>घोषणा</h2><p style="border:1px solid #cbd5e1;padding:10px">मी दिलेली माहिती खरी असून नियम व अटी मान्य आहेत. घोषणा स्वीकारली: <strong>${application.declarationAccepted ? "होय" : "नाही"}</strong></p></section>${section("अर्जाची स्थिती", [["स्थिती", statusLabel], ["अर्ज क्रमांक", "applicationNumber"]])}<footer style="margin-top:24px;border-top:1px solid #cbd5e1;padding-top:10px;color:#64748b;font-size:10px">हा दस्तऐवज मागणी अर्ज प्रणालीतून तयार करण्यात आला आहे.</footer></div>`;
+    // html2canvas does not capture a print surface outside the viewport. Keep
+    // it on-screen only while the canvas is rendered, then remove it.
+    node.style.cssText = "position:fixed;left:0;top:0;width:794px;background:#fff;z-index:2147483647;pointer-events:none";
+    node.innerHTML = `<style>.pdf-section{margin-top:16px;break-inside:avoid}.pdf-section h2{margin:0 0 7px;padding:6px 9px;background:#eaf3fb;border-left:3px solid #0b3d91;color:#0b3d91;font-size:13px}.pdf-grid{display:grid;grid-template-columns:35% 65%;border:1px solid #cbd5e1}.pdf-label,.pdf-value{padding:6px 8px;border-bottom:1px solid #e2e8f0}.pdf-label{font-weight:700;background:#f8fafc;border-right:1px solid #e2e8f0}.pdf-section li{margin:3px 0}</style><div style="font-family:'Noto Sans Devanagari','Segoe UI',sans-serif;color:#1e293b;padding:34px 42px;font-size:12px;line-height:1.55"><header style="text-align:center;border-bottom:3px solid #0b3d91;padding-bottom:14px;margin-bottom:18px"><div style="font-size:21px;font-weight:700;color:#0b3d91">सोलापूर महानगरपालिका</div><div style="font-size:14px;color:#475569">भूमी व मालमत्ता व्यवस्थापन विभाग</div><div style="font-size:19px;font-weight:700;color:#0b3d91;margin-top:12px">मागणी अर्ज</div><div style="display:inline-block;margin-top:10px;padding:7px 16px;border:1px solid #0b3d91;font-weight:700;color:#0b3d91">अर्ज क्रमांक: ${value("applicationNumber")}</div></header>${section("सेवेची माहिती", [["सेवेचा प्रकार", serviceLabel], ["व्यवसायाचा प्रकार", businessLabel], ["इतर व्यवसायाचा प्रकार", "otherBusinessType"]])}${section("अर्जदाराची माहिती", [["अर्ज दिनांक", application.createdAt ? new Date(application.createdAt).toLocaleDateString("mr-IN") : "-"], ["अर्जदाराचा प्रकार", value("applicantType")], ["अर्जदाराचे पूर्ण नाव", "applicantName"], ["मोबाईल क्रमांक", "mobile"], ["ई-मेल आयडी", "email"], ["आधार/ओळखपत्र क्रमांक", "identityNumber"], ["PAN क्रमांक", "panNumber"], ["GST क्रमांक", "gstNumber"]])}${section("पत्ता / सेवा माहिती", [["कायमचा पत्ता", "permanentAddress"], ["पत्रव्यवहाराचा पत्ता", "correspondenceAddress"], ["राज्य", "state"], ["जिल्हा", "district"], ["शहर", "city"], ["तालुका", "taluka"], ["पिनकोड", "pinCode"], ["प्रभाग", "prabhag"]])}${section("कालावधी / सुविधा / आवश्यकता", [["सेवा/विक्रीचा प्रकार", "serviceDescription"], ["स्टॉल/जागेची आवश्यकता (क्षेत्रफळामध्ये)", "spaceRequirement"], ["इतर आवश्यक माहिती", "otherInformation"], ["प्रारंभ तारीख", "startDate"], ["समाप्ती तारीख", "endDate"], ["आवश्यक कालावधी (दिवस)", "requiredDuration"], ["वीज सुविधा", application.electricityRequired ? "होय" : "नाही"], ["पाणी सुविधा", application.waterRequired ? "होय" : "नाही"], ["इतर आवश्यक सुविधा", "otherFacilities"], ["कचरा व्यवस्थापन / संबंधित आवश्यकता", "wasteManagement"]])}<section class="pdf-section"><h2>कागदपत्रे</h2><ul>${documents}</ul></section><section class="pdf-section"><h2>घोषणा</h2><p style="border:1px solid #cbd5e1;padding:10px">मी दिलेली माहिती खरी असून नियम व अटी मान्य आहेत. घोषणा स्वीकारली: <strong>${application.declarationAccepted ? "होय" : "नाही"}</strong></p></section>${section("अर्जाची स्थिती", [["स्थिती", statusLabel], ["अर्ज क्रमांक", "applicationNumber"]])}<section class="pdf-section"><h2>कार्यालयीन वापरासाठी</h2><div style="height:48px;border:1px solid #cbd5e1;padding:8px">नोंद / शेरा: ________________________________________________</div></section><div style="display:flex;justify-content:space-between;margin-top:34px"><span>अर्जदाराची सही: ____________________</span><span>दिनांक: ____________________</span></div><footer style="margin-top:24px;border-top:1px solid #cbd5e1;padding-top:10px;color:#64748b;font-size:10px">हा दस्तऐवज मागणी अर्ज प्रणालीतून तयार करण्यात आला आहे.</footer></div>`;
+    node.querySelector("footer")?.remove();
     document.body.appendChild(node);
     try {
       const pdfBlob = await html2pdf().set({
@@ -654,7 +733,7 @@ export default function DemandApplicationPage() {
       const application = current?.id === temporaryApplication.id
         ? current
         : (await client.get(`/demand-applications/public/${temporaryApplication.id}`, { headers: { "X-Demand-Application-Token": temporaryApplication.accessToken } })).data.data;
-      await downloadApplication(application);
+      await downloadApplication(application, temporaryApplication.accessToken);
       clearTemporaryApplication();
     } catch (error) {
       setMessage(
@@ -881,6 +960,10 @@ export default function DemandApplicationPage() {
                 {select("taluka", "तालुका", talukas, true)}
                 {input("pinCode", "पिनकोड", "tel", true)}
                 {select("prabhag", "प्रभाग", prabhags, true)}
+                {input("lengthFt", "Length (ft)", "number", true)}
+                {input("widthFt", "Width (ft)", "number", true)}
+                <label className="demand-field"><span>क्षेत्रफळ (sq ft)</span><input className="form-input" value={form.areaSqFt} readOnly /></label>
+                <label className="demand-field"><span>Rate (₹)</span><input className="form-input" value={form.calculatedRate} readOnly /></label>
                 {input(
                   "serviceDescription",
                   "सेवा/विक्रीचा प्रकार",
@@ -968,7 +1051,7 @@ export default function DemandApplicationPage() {
                 </div>
                 <div className="demand-documents wide">
                   <h3>कागदपत्रे</h3>
-                  <p>PDF, JPG, PNG, DOC, DOCX किंवा XLSX, कमाल 10 MB</p>
+                  <p>फक्त PDF, कमाल 20 MB</p>
                   <div className="demand-upload-row">
                     {[
                       "ओळखपत्र",
@@ -982,8 +1065,8 @@ export default function DemandApplicationPage() {
                           type="file"
                           data-type={type}
                           onChange={upload}
-                          disabled={!current}
-                          accept=".pdf,.jpg,.jpeg,.png,.doc,.docx,.xlsx"
+                          disabled={saving || uploading}
+                          accept=".pdf,application/pdf"
                         />
                       </label>
                     ))}
@@ -1058,14 +1141,14 @@ export default function DemandApplicationPage() {
                 <button
                   className="btn btn-outline"
                   onClick={() => save(false)}
-                  disabled={saving}
+                  disabled={saving || uploading}
                 >
                   Save Draft
                 </button>
                 <button
                   className="btn btn-primary"
                   onClick={() => save(true)}
-                  disabled={saving}
+                  disabled={saving || uploading}
                 >
                   {submitting ? "सादर करत आहे..." : "Final Submit"}
                 </button>
@@ -1099,7 +1182,7 @@ export default function DemandApplicationPage() {
           onClose={() => setSubmissionSuccess(null)}
           footer={<button className="btn btn-primary" onClick={() => setSubmissionSuccess(null)}>ठीक आहे</button>}
         >
-          <p><strong>अर्ज क्रमांक:</strong> {submissionSuccess.applicationNumber}</p>
+          <p><strong>आपला अर्ज क्रमांक:</strong> {submissionSuccess.applicationNumber}</p>
           {submissionSuccess.submittedAt && (
             <p><strong>सादर केल्याची तारीख व वेळ:</strong> {new Date(submissionSuccess.submittedAt).toLocaleString("mr-IN", { dateStyle: "medium", timeStyle: "short" })}</p>
           )}

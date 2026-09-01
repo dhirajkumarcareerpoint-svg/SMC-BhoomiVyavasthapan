@@ -31,6 +31,14 @@ public class DemandWorkflowController : ControllerBase
     }
 
     [AllowAnonymous]
+    [HttpGet("public-status/{applicationNumber}")]
+    public async Task<IActionResult> PublicStatus(string applicationNumber, [FromQuery(Name = "token")] string? paymentAccessToken, [FromQuery] string? requestToken)
+    {
+        var status = await _service.GetPublicStatusAsync(applicationNumber, paymentAccessToken, requestToken);
+        return status is null ? NotFound(ApiResponse<object>.Fail("दिलेल्या अर्ज क्रमांकाची माहिती उपलब्ध नाही.")) : Ok(ApiResponse<PublicDemandApplicationStatusDto>.Ok(status));
+    }
+
+    [AllowAnonymous]
     [HttpGet("payment/{applicationNumber}/application-pdf")]
     public async Task<IActionResult> PublicApplicationPdf(string applicationNumber, [FromQuery] string token)
     {
@@ -55,6 +63,10 @@ public class DemandWorkflowController : ControllerBase
     [HttpGet("queue")]
     [Authorize(Policy = "DemandOfficer")]
     public async Task<IActionResult> Queue() => Ok(ApiResponse<List<DemandWorkflowDto>>.Ok(await _service.QueueAsync(_user.UserName ?? "System")));
+
+    [HttpGet("processed-history")]
+    [Authorize(Policy = "DemandOfficer")]
+    public async Task<IActionResult> ProcessedHistory() => Ok(ApiResponse<List<ProcessedDemandWorkflowDto>>.Ok(await _service.ProcessedHistoryAsync(_user.UserName ?? "System")));
 
     [HttpPost("{applicationId:int}/ensure")]
     [Authorize(Policy = "DemandOfficer")]

@@ -19,6 +19,8 @@ public static class DependencyInjection
         services.AddScoped<IApplicationDbContext>(sp => sp.GetRequiredService<ApplicationDbContext>());
 
         services.AddHttpContextAccessor();
+        services.Configure<SmsOptions>(config.GetSection("Sms"));
+        services.AddHttpClient("AclSms", client => client.Timeout = TimeSpan.FromSeconds(20));
         services.AddScoped<ICurrentUserService, CurrentUserService>();
         services.AddScoped<ITokenService, TokenService>();
         services.AddScoped<IFileStorageService, FileStorageService>();

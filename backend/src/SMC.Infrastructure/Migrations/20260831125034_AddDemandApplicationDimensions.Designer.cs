@@ -3,6 +3,7 @@ using System;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Infrastructure;
 using Microsoft.EntityFrameworkCore.Metadata;
+using Microsoft.EntityFrameworkCore.Migrations;
 using Microsoft.EntityFrameworkCore.Storage.ValueConversion;
 using SMC.Infrastructure.Persistence;
 
@@ -11,9 +12,11 @@ using SMC.Infrastructure.Persistence;
 namespace SMC.Infrastructure.Migrations
 {
     [DbContext(typeof(ApplicationDbContext))]
-    partial class ApplicationDbContextModelSnapshot : ModelSnapshot
+    [Migration("20260831125034_AddDemandApplicationDimensions")]
+    partial class AddDemandApplicationDimensions
     {
-        protected override void BuildModel(ModelBuilder modelBuilder)
+        /// <inheritdoc />
+        protected override void BuildTargetModel(ModelBuilder modelBuilder)
         {
 #pragma warning disable 612, 618
             modelBuilder
@@ -278,9 +281,6 @@ namespace SMC.Infrastructure.Migrations
                         .HasMaxLength(40)
                         .HasColumnType("nvarchar(40)");
 
-                    b.Property<decimal?>("CalculatedRate")
-                        .HasColumnType("decimal(18,2)");
-
                     b.Property<string>("City")
                         .IsRequired()
                         .HasMaxLength(100)
@@ -335,9 +335,6 @@ namespace SMC.Infrastructure.Migrations
 
                     b.Property<bool>("IsDeleted")
                         .HasColumnType("bit");
-
-                    b.Property<decimal?>("LengthFt")
-                        .HasColumnType("decimal(18,2)");
 
                     b.Property<string>("Location")
                         .IsRequired()
@@ -441,9 +438,6 @@ namespace SMC.Infrastructure.Migrations
 
                     b.Property<bool>("WaterRequired")
                         .HasColumnType("bit");
-
-                    b.Property<decimal?>("WidthFt")
-                        .HasColumnType("decimal(18,2)");
 
                     b.Property<string>("Zone")
                         .IsRequired()

@@ -1,4 +1,6 @@
 using Microsoft.EntityFrameworkCore;
+using System.Security.Cryptography;
+using System.Text;
 using Microsoft.Extensions.Logging;
 using System.Globalization;
 using QuestPDF.Fluent;
@@ -15,7 +17,9 @@ public interface IDemandWorkflowService
 {
     Task<DemandWorkflowDto?> GetAsync(int applicationId);
     Task<PublicPaymentDto?> GetPublicPaymentAsync(string applicationNumber, string accessToken);
+    Task<PublicDemandApplicationStatusDto?> GetPublicStatusAsync(string applicationNumber, string? paymentAccessToken, string? requestToken = null);
     Task<List<DemandWorkflowDto>> QueueAsync(string actor);
+    Task<List<ProcessedDemandWorkflowDto>> ProcessedHistoryAsync(string actor);
     Task<DemandWorkflowDto> EnsureAsync(int applicationId, string actor);
     Task<DemandWorkflowDto> VerifyJeAsync(int applicationId, string actor, bool approve, string? reason);
     Task<DemandWorkflowDto> VerifyOsAsync(int applicationId, string actor, bool approve, string? reason);
@@ -60,6 +64,33 @@ public class DemandWorkflowService : IDemandWorkflowService
         };
     }
 
+    public async Task<PublicDemandApplicationStatusDto?> GetPublicStatusAsync(string applicationNumber, string? paymentAccessToken, string? requestToken = null)
+    {
+        var number = applicationNumber?.Trim();
+        if (string.IsNullOrWhiteSpace(number)) return null;
+        var workflow = await _db.DemandApplicationWorkflows.AsNoTracking().Include(item => item.DemandApplication).ThenInclude(application => application.Documents)
+            .FirstOrDefaultAsync(item => item.DemandApplication.ApplicationNumber == number && !item.DemandApplication.IsDeleted);
+        if (workflow is null) return null;
+        var actions = await _db.AuditLogs.AsNoTracking().Where(log => log.EntityName == nameof(DemandApplication) && log.EntityId == workflow.DemandApplicationId)
+            .OrderByDescending(log => log.Timestamp).ToListAsync();
+        var app = workflow.DemandApplication;
+        AuditLog? Latest(params string[] names) => actions.FirstOrDefault(log => names.Contains(log.Action));
+        var je = Latest("JE Verified", "JE Rejected"); var os = Latest("Forwarded to Assistant Commissioner", "Payment Request Sent", "OS Rejected", "Payment Verified", "Payment Rejected"); var ac = Latest("Final Approved", "Assistant Commissioner Rejected");
+        string Status(AuditLog? action, string pendingStage, string approvedAction, string rejectedAction, string fallback) => action?.Action == approvedAction ? "Approved" : action?.Action == rejectedAction ? "Rejected" : workflow.Stage == pendingStage ? "Pending" : fallback;
+        var request = app.Documents.Where(document => !document.IsDeleted && document.RequestedAt != null).OrderByDescending(document => document.RequestedAt).FirstOrDefault();
+        var canResubmit = request is not null && request.RequestTokenConsumedAt is null && !string.IsNullOrWhiteSpace(requestToken) && CryptographicOperations.FixedTimeEquals(Convert.FromHexString(request.RequestTokenHash ?? "00"), SHA256.HashData(Encoding.UTF8.GetBytes(requestToken)));
+        return new PublicDemandApplicationStatusDto
+        {
+            DemandApplicationId = app.Id, ApplicationNumber = app.ApplicationNumber, ApplicantName = app.ApplicantName, SubmittedAt = app.SubmittedAt, CurrentStatus = workflow.Stage, PayableAmount = workflow.PayableAmount, PaymentStatus = workflow.PaymentStatus,
+            PaymentAccessGranted = workflow.Stage == "PaymentRequired"
+                && workflow.PaymentStatus == "PaymentRequired"
+                && FixedTimeEquals(workflow.PaymentAccessToken, paymentAccessToken), HasDocumentRequest = request is not null, RequestedDocumentId=request?.Id, RequestedDocumentType=request?.DocumentType, RequestedDocumentName=request?.FileName, RequestRemark=request?.RequestRemark, RequestDate=request?.RequestedAt, RequestStatus=request?.VerificationStatus, CanResubmitRequestedDocument=canResubmit,
+            Je = new PublicWorkflowLevelDto { Status = je?.Action == "JE Verified" ? "Accepted" : je?.Action == "JE Rejected" ? "Rejected" : workflow.Stage == "JEPending" ? "Pending" : "Accepted", ActionAt = je?.Timestamp, RejectionReason = je?.Action == "JE Rejected" ? workflow.RejectionReason : null },
+            Os = new PublicWorkflowLevelDto { Status = os?.Action == "Forwarded to Assistant Commissioner" || workflow.Stage is "AssistantCommissionerApprovalPending" or "Approved" ? "Forwarded" : os?.Action == "Payment Request Sent" ? "Payment Required" : os?.Action is "OS Rejected" or "Payment Rejected" ? "Rejected" : workflow.Stage == "OSPending" ? "Pending" : "Accepted", ActionAt = os?.Timestamp, RejectionReason = os?.Action is "OS Rejected" or "Payment Rejected" ? workflow.RejectionReason : null, PaymentStatus = workflow.PaymentStatus },
+            AssistantCommissioner = new PublicWorkflowLevelDto { Status = Status(ac, "AssistantCommissionerApprovalPending", "Final Approved", "Assistant Commissioner Rejected", "Pending"), ActionAt = ac?.Timestamp, RejectionReason = ac?.Action == "Assistant Commissioner Rejected" ? workflow.RejectionReason : null }
+        };
+    }
+
     public async Task<List<DemandWorkflowDto>> QueueAsync(string actor)
     {
         var role = RoleFor(actor);
@@ -72,6 +103,41 @@ public class DemandWorkflowService : IDemandWorkflowService
         };
         var rows = await _db.DemandApplicationWorkflows.Include(x => x.DemandApplication).Where(x => stages.Contains(x.Stage)).OrderBy(x => x.CreatedAt).ToListAsync();
         return rows.Select(ToDto).ToList();
+    }
+
+    public async Task<List<ProcessedDemandWorkflowDto>> ProcessedHistoryAsync(string actor)
+    {
+        var actions = RoleFor(actor) switch
+        {
+            "JE" => new[] { "JE Verified", "JE Rejected" },
+            "OS" => new[] { "Payment Request Sent", "OS Rejected", "Payment Verified", "Payment Rejected", "Payment status set to PaymentPending", "Payment status set to PaymentDone", "Forwarded to Assistant Commissioner" },
+            "AssistantCommissioner" => new[] { "Final Approved", "Assistant Commissioner Rejected" },
+            _ => Array.Empty<string>()
+        };
+        if (actions.Length == 0) return [];
+
+        var actionsByOfficer = await _db.AuditLogs.AsNoTracking()
+            .Where(log => log.EntityName == nameof(DemandApplication) && log.UserName == actor && actions.Contains(log.Action))
+            .OrderByDescending(log => log.Timestamp)
+            .ToListAsync();
+        var latestActions = actionsByOfficer.GroupBy(log => log.EntityId).Select(group => group.First()).ToList();
+        if (latestActions.Count == 0) return [];
+
+        var applicationIds = latestActions.Select(log => log.EntityId).ToList();
+        var workflows = await _db.DemandApplicationWorkflows.AsNoTracking()
+            .Include(workflow => workflow.DemandApplication)
+            .Where(workflow => applicationIds.Contains(workflow.DemandApplicationId))
+            .ToDictionaryAsync(workflow => workflow.DemandApplicationId);
+
+        return latestActions
+            .Where(log => workflows.ContainsKey(log.EntityId))
+            .Select(log => new ProcessedDemandWorkflowDto
+            {
+                Workflow = ToDto(workflows[log.EntityId]),
+                Action = log.Action,
+                ActionAt = log.Timestamp
+            })
+            .ToList();
     }
 
     public async Task<DemandWorkflowDto> EnsureAsync(int applicationId, string actor)
@@ -284,7 +350,7 @@ public class DemandWorkflowService : IDemandWorkflowService
     public async Task<(byte[] content, string fileName)> GenerateApplicationPdfAsync(int applicationId)
     {
         var workflow = await GetWorkflow(applicationId);
-        return (GeneratePdf(workflow, false), $"Demand-Application-{workflow.DemandApplication.ApplicationNumber}.pdf");
+        return (GenerateApplicationPdf(workflow), $"Demand-Application-{workflow.DemandApplication.ApplicationNumber}.pdf");
     }
 
     private async Task<DemandWorkflowDto> Verify(int id, string actor, string role, bool approve, string? reason, string nextStage, string action)
@@ -298,10 +364,10 @@ public class DemandWorkflowService : IDemandWorkflowService
         return ToDto(workflow);
     }
 
-    private async Task<DemandApplicationWorkflow> GetWorkflow(int id) => await _db.DemandApplicationWorkflows.Include(x => x.DemandApplication).FirstOrDefaultAsync(x => x.DemandApplicationId == id) ?? throw new InvalidOperationException("वर्कफ्लो नोंद सापडली नाही.");
+    private async Task<DemandApplicationWorkflow> GetWorkflow(int id) => await _db.DemandApplicationWorkflows.Include(x => x.DemandApplication).ThenInclude(x => x.Documents).FirstOrDefaultAsync(x => x.DemandApplicationId == id) ?? throw new InvalidOperationException("वर्कफ्लो नोंद सापडली नाही.");
     private async Task<DemandWorkflowDto?> FindDto(int id) { var x = await _db.DemandApplicationWorkflows.Include(x => x.DemandApplication).FirstOrDefaultAsync(x => x.DemandApplicationId == id); return x is null ? null : ToDto(x); }
     private async Task<DemandApplicationWorkflow?> PublicWorkflow(string number, string token) { var workflow = await _db.DemandApplicationWorkflows.Include(x => x.DemandApplication).FirstOrDefaultAsync(x => x.DemandApplication.ApplicationNumber == number && !x.DemandApplication.IsDeleted); return workflow is not null && FixedTimeEquals(workflow.PaymentAccessToken, token) ? workflow : null; }
-    private static string BuildPaymentLink(string number, string token) => $"{Environment.GetEnvironmentVariable("APP_BASE_URL")?.TrimEnd('/') ?? "http://localhost:3000"}/demand-application/payment/{Uri.EscapeDataString(number)}?token={Uri.EscapeDataString(token)}";
+    private static string BuildPaymentLink(string number, string token) => $"{Environment.GetEnvironmentVariable("APP_BASE_URL")?.TrimEnd('/') ?? "http://localhost:3000"}/application-status?applicationNumber={Uri.EscapeDataString(number)}&token={Uri.EscapeDataString(token)}";
     private static string? BuildCertificateLink(string number, string? token) => string.IsNullOrWhiteSpace(token) ? null : $"{Environment.GetEnvironmentVariable("APP_BASE_URL")?.TrimEnd('/') ?? "http://localhost:3000"}/api/demand-workflow/payment/{Uri.EscapeDataString(number)}/certificate-pdf?token={Uri.EscapeDataString(token)}";
     private async Task NotifyAssistantCommissionerAsync(string applicationNumber)
     {
@@ -334,6 +400,50 @@ public class DemandWorkflowService : IDemandWorkflowService
                 if (certificate) { Row("मंजुरी दिनांक", workflow.ApprovedAt?.ToString("dd-MM-yyyy")); Row("सहाय्यक आयुक्त", workflow.ApprovedBy); c.Item().PaddingTop(24).Text("सदर जागा मागणी अर्ज मंजूर करण्यात आला आहे.").Bold(); }
             });
             page.Footer().AlignCenter().Text($"तयार दिनांक: {DateTime.UtcNow:dd-MM-yyyy}");
+        })).GeneratePdf();
+    }
+
+    // Kept separate from the certificate renderer: this is the persisted,
+    // server-side applicant form, not an html2canvas browser snapshot.
+    private static byte[] GenerateApplicationPdf(DemandApplicationWorkflow workflow)
+    {
+        QuestPDF.Settings.License = LicenseType.Community;
+        var app = workflow.DemandApplication;
+        return QuestPDF.Fluent.Document.Create(container => container.Page(page =>
+        {
+            page.Size(PageSizes.A4); page.Margin(30);
+            page.DefaultTextStyle(style => style.FontSize(9).FontFamily("Nirmala UI"));
+            page.Header().AlignCenter().Column(column =>
+            {
+                column.Item().Text("सोलापूर महानगरपालिका").FontSize(17).Bold();
+                column.Item().Text("भूमी व मालमत्ता व्यवस्थापन विभाग").FontSize(11);
+                column.Item().PaddingTop(5).Text("मागणी अर्ज").FontSize(15).Bold();
+                column.Item().PaddingTop(7).LineHorizontal(1).LineColor(Colors.Blue.Darken2);
+            });
+            page.Content().PaddingVertical(12).Column(column =>
+            {
+                void Section(string title) => column.Item().PaddingTop(7).Background(Colors.Blue.Lighten5).Padding(6).Text(title).FontSize(11).Bold().FontColor(Colors.Blue.Darken3);
+                void Row(string label, string? value) => column.Item().Row(row => { row.RelativeItem(2).PaddingVertical(2).Text(label).Bold(); row.RelativeItem(3).PaddingVertical(2).Text(string.IsNullOrWhiteSpace(value) ? "-" : value); });
+                string YesNo(bool value) => value ? "होय" : "नाही";
+                string Date(DateTime? value) => value?.ToString("dd-MM-yyyy", CultureInfo.InvariantCulture) ?? "-";
+                string BusinessType() => app.BusinessType == DemandBusinessType.Other ? app.OtherBusinessType ?? "इतर" : app.BusinessType switch
+                {
+                    DemandBusinessType.FirecrackerStall => "फटाके स्टॉल", DemandBusinessType.GanpatiIdolStall => "गणपती मूर्ती स्टॉल", DemandBusinessType.RangpanchamiStall => "रंगपंचमी स्टॉल", DemandBusinessType.RakshabandhanStall => "रक्षाबंधन स्टॉल", DemandBusinessType.DiwaliFaralStall => "दिवाळी फराळ स्टॉल", _ => "-"
+                };
+
+                Row("अर्ज क्रमांक", app.ApplicationNumber); Row("अर्ज सादर दिनांक", Date(app.SubmittedAt ?? app.CreatedAt)); Row("स्थिती", app.Status.ToString());
+                Section("१. अर्जदाराची माहिती");
+                Row("पूर्ण नाव", app.ApplicantName); Row("मोबाईल", app.Mobile); Row("ई-मेल", app.Email); Row("पत्ता", app.PermanentAddress);
+                Row("राज्य / जिल्हा / शहर", $"{app.State} / {app.District} / {app.City}"); Row("तालुका / प्रभाग / PIN", $"{app.Taluka} / {app.Prabhag} / {app.PinCode}");
+                Section("२. मागणीची माहिती");
+                Row("मालमत्ता / जागेचा प्रकार", app.ServiceType.ToString()); Row("व्यवसायाचा प्रकार", BusinessType()); Row("सेवा/विक्रीचा प्रकार", app.ServiceDescription); Row("स्टॉल/जागेची आवश्यकता (क्षेत्रफळामध्ये)", app.SpaceRequirement); Row("वापराचा उद्देश", app.ServiceDescription); Row("शेरा", app.OtherInformation);
+                Row("कालावधी", $"{Date(app.StartDate)} ते {Date(app.EndDate)} ({app.RequiredDuration} दिवस)"); Row("वीज सुविधा", YesNo(app.ElectricityRequired)); Row("पाणी सुविधा", YesNo(app.WaterRequired)); Row("इतर आवश्यक सुविधा", app.OtherFacilities); Row("कचरा व्यवस्थापन / संबंधित आवश्यकता", app.WasteManagement);
+                Section("३. संलग्न कागदपत्रे");
+                var documents = app.Documents.Where(document => !document.IsDeleted).ToList();
+                if (documents.Count == 0) Row("कागदपत्रांची माहिती", "-"); else foreach (var document in documents) Row(document.DocumentType, document.FileName);
+                Section("घोषणा"); column.Item().PaddingTop(3).Text($"मी दिलेली माहिती खरी असून नियम व अटी मान्य आहेत. घोषणा स्वीकारली: {YesNo(app.DeclarationAccepted)}");
+                column.Item().PaddingTop(20).Row(row => { row.RelativeItem().Text("अर्जदाराची सही: ____________________"); row.RelativeItem().AlignRight().Text("दिनांक: ____________________"); });
+            });
         })).GeneratePdf();
     }
     private string RoleFor(string actor) => _currentUser.Role switch { "JE" => "JE", "OS" => "OS", "AssistantCommissioner" or "Admin" => "AssistantCommissioner", _ => "Applicant" };

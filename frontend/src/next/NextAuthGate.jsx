@@ -13,6 +13,7 @@ export default function NextAuthGate({ children }) {
   // Applicant entry and its payment return route remain public.  All other
   // management routes use the existing Admin / legacy Officer session.
   const isDemandPublicRoute = pathname === "/demand-application"
+    || pathname === "/application-status"
     || pathname.startsWith("/demand-application/payment/")
   // `/` immediately redirects to the public Demand Application landing page.
   // It must remain public during hydration so that redirect is not raced by

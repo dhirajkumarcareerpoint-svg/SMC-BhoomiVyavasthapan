@@ -14,9 +14,7 @@ const paymentStatusText = (status) => ({
 
 const isCompleted = (status) => ["PaymentDone", "PaymentVerificationPending", "PaymentVerified"].includes(status)
 
-export default function DemandPaymentPage() {
-  const { applicationNumber } = useParams()
-  const token = new URLSearchParams(typeof window === "undefined" ? "" : window.location.search).get("token") || ""
+export function ApplicantPaymentPanel({ applicationNumber, token, onSubmitted, embedded = false }) {
   const [payment, setPayment] = useState(null)
   const [utr, setUtr] = useState("")
   const [paymentDate, setPaymentDate] = useState(new Date().toISOString().slice(0, 10))
@@ -54,6 +52,7 @@ export default function DemandPaymentPage() {
     try {
       const response = await client.post(`/demand-workflow/${payment.demandApplicationId}/payment`, data)
       setPayment((current) => ({ ...current, ...response.data.data }))
+      onSubmitted?.(response.data.data)
       setMessage("पेमेंट पूर्ण झाले आहे. OS स्क्रीनवर स्थिती आपोआप अद्ययावत होईल.")
     } catch (error) {
       setMessage(error.response?.data?.messageMr || error.response?.data?.message || "पेमेंट पुष्टीकरण सादर करता आले नाही.")
@@ -68,13 +67,13 @@ export default function DemandPaymentPage() {
   const downloadUrl = (kind) => `/api/demand-workflow/payment/${encodeURIComponent(payment.applicationNumber)}/${kind}?token=${encodeURIComponent(token)}`
 
   return (
-    <section style={{ maxWidth: 820, margin: "0 auto" }} aria-labelledby="payment-title">
-      <div className="page-header">
+    <section style={{ maxWidth: 820, margin: embedded ? "16px 0 0" : "0 auto" }} aria-labelledby="payment-title">
+      {!embedded && <div className="page-header">
         <div>
           <div className="page-title" id="payment-title">सोलापूर महानगरपालिका</div>
           <div className="page-subtitle">भूमी व मालमत्ता व्यवस्थापन — ऑनलाइन पेमेंट</div>
         </div>
-      </div>
+      </div>}
 
       <div className="card" style={{ overflow: "hidden" }}>
         <div style={{ padding: "20px 24px", background: "linear-gradient(110deg, #062b50, #0f5d78)", color: "#fff" }}>
@@ -135,4 +134,10 @@ export default function DemandPaymentPage() {
       </div>
     </section>
   )
+}
+
+export default function DemandPaymentPage() {
+  const { applicationNumber } = useParams()
+  const token = new URLSearchParams(typeof window === "undefined" ? "" : window.location.search).get("token") || ""
+  return <ApplicantPaymentPanel applicationNumber={applicationNumber} token={token} />
 }
