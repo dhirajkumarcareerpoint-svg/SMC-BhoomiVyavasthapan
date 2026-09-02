@@ -1,10 +1,13 @@
 using System;
+using Microsoft.EntityFrameworkCore.Infrastructure;
 using Microsoft.EntityFrameworkCore.Migrations;
+using SMC.Infrastructure.Persistence;
 
 #nullable disable
 
 namespace SMC.Infrastructure.Migrations;
 
+[DbContext(typeof(ApplicationDbContext))]
 [Migration("20260829090000_AddSmsEvents")]
 public partial class AddSmsEvents : Migration
 {

@@ -24,6 +24,8 @@ public interface IDemandWorkflowService
     Task<DemandWorkflowDto> VerifyJeAsync(int applicationId, string actor, bool approve, string? reason);
     Task<DemandWorkflowDto> VerifyOsAsync(int applicationId, string actor, bool approve, string? reason);
     Task<DemandWorkflowDto> CreatePaymentRequestAsync(int applicationId, string actor);
+    Task<RazorpayOrderDto> CreateRazorpayOrderAsync(string applicationNumber, string accessToken, CancellationToken cancellationToken = default);
+    Task<DemandWorkflowDto> VerifyRazorpayPaymentAsync(string applicationNumber, string accessToken, RazorpayPaymentDto dto, CancellationToken cancellationToken = default);
     Task<DemandWorkflowDto> SubmitPaymentAsync(int applicationId, PaymentConfirmationDto dto, Stream screenshot, string fileName, string contentType, string accessToken);
     Task<DemandWorkflowDto> VerifyPaymentAsync(int applicationId, string actor, bool approve, string? reason);
     Task<DemandWorkflowDto> SetPaymentStatusAsync(int applicationId, string actor, string paymentStatus);
@@ -38,12 +40,13 @@ public class DemandWorkflowService : IDemandWorkflowService
     private readonly IApplicationDbContext _db;
     private readonly IAuditService _audit;
     private readonly IFileStorageService _storage;
-    private readonly ISmsService _sms;
     private readonly ICurrentUserService _currentUser;
     private readonly ILogger<DemandWorkflowService> _logger;
+    private readonly IRazorpayGateway _razorpay;
+    private readonly ISmsService _sms;
 
-    public DemandWorkflowService(IApplicationDbContext db, IAuditService audit, IFileStorageService storage, ISmsService sms, ICurrentUserService currentUser, ILogger<DemandWorkflowService> logger)
-    { _db = db; _audit = audit; _storage = storage; _sms = sms; _currentUser = currentUser; _logger = logger; }
+    public DemandWorkflowService(IApplicationDbContext db, IAuditService audit, IFileStorageService storage, ICurrentUserService currentUser, IRazorpayGateway razorpay, ISmsService sms, ILogger<DemandWorkflowService> logger)
+    { _db = db; _audit = audit; _storage = storage; _currentUser = currentUser; _razorpay = razorpay; _sms = sms; _logger = logger; }
 
     public async Task<DemandWorkflowDto?> GetAsync(int applicationId) => await FindDto(applicationId);
 
@@ -62,6 +65,44 @@ public class DemandWorkflowService : IDemandWorkflowService
             CertificateFileName = workflow.CertificateFileName,
             CertificateFilePath = workflow.CertificateFilePath
         };
+    }
+
+    public async Task<RazorpayOrderDto> CreateRazorpayOrderAsync(string applicationNumber, string accessToken, CancellationToken cancellationToken = default)
+    {
+        var workflow = await PublicWorkflow(applicationNumber, accessToken) ?? throw new UnauthorizedAccessException("अवैध payment link.");
+        if (workflow.Stage != "PaymentRequired" || workflow.PaymentStatus is not ("PaymentRequired" or "PaymentPending")) throw new InvalidOperationException("हा अर्ज सध्या पेमेंटसाठी उपलब्ध नाही.");
+        if (workflow.PayableAmount <= 0m) throw new InvalidOperationException("पेमेंट रक्कम वैध नाही.");
+        if (!string.IsNullOrWhiteSpace(workflow.RazorpayOrderId))
+            return new RazorpayOrderDto { KeyId = _razorpay.KeyId, OrderId = workflow.RazorpayOrderId, Amount = checked((int)decimal.Round(workflow.PayableAmount * 100m)), Currency = "INR" };
+
+        var order = await _razorpay.CreateOrderAsync(workflow.DemandApplication.ApplicationNumber, workflow.PayableAmount, cancellationToken);
+        workflow.RazorpayOrderId = order.OrderId;
+        await _db.SaveChangesAsync(cancellationToken);
+        return new RazorpayOrderDto { KeyId = _razorpay.KeyId, OrderId = order.OrderId, Amount = order.Amount, Currency = order.Currency };
+    }
+
+    public async Task<DemandWorkflowDto> VerifyRazorpayPaymentAsync(string applicationNumber, string accessToken, RazorpayPaymentDto dto, CancellationToken cancellationToken = default)
+    {
+        var workflow = await PublicWorkflow(applicationNumber, accessToken) ?? throw new UnauthorizedAccessException("अवैध payment link.");
+        if (string.IsNullOrWhiteSpace(workflow.RazorpayOrderId) || !string.Equals(workflow.RazorpayOrderId, dto.OrderId, StringComparison.Ordinal)) throw new InvalidOperationException("अवैध Razorpay order.");
+        if (string.IsNullOrWhiteSpace(dto.PaymentId) || string.IsNullOrWhiteSpace(dto.Signature) || !_razorpay.VerifyPaymentSignature(dto.OrderId, dto.PaymentId, dto.Signature)) throw new InvalidOperationException("Razorpay payment verification failed.");
+        if (workflow.RazorpayPaymentId is not null && !string.Equals(workflow.RazorpayPaymentId, dto.PaymentId, StringComparison.Ordinal)) throw new InvalidOperationException("या अर्जासाठी दुसरे payment आधीच नोंदवले आहे.");
+
+        workflow.RazorpayPaymentId = dto.PaymentId;
+        workflow.RazorpaySignature = dto.Signature;
+        workflow.Utr = dto.PaymentId;
+        workflow.PaymentDate = DateTime.UtcNow.Date;
+        workflow.PaymentSubmittedBy = "Razorpay";
+        workflow.PaymentSubmittedAt = DateTime.UtcNow;
+        workflow.PaymentStatus = "PaymentDone";
+        workflow.Stage = "PaymentRequired";
+        workflow.DemandApplication.PaymentStatus = "PaymentDone";
+        workflow.DemandApplication.Status = DemandApplicationStatus.FeePending;
+        workflow.UpdatedBy = "Razorpay";
+        workflow.UpdatedAt = DateTime.UtcNow;
+        await _db.SaveChangesAsync(cancellationToken);
+        await _audit.LogAsync("Payment Submitted", nameof(DemandApplication), workflow.DemandApplicationId);
+        return ToDto(workflow);
     }
 
     public async Task<PublicDemandApplicationStatusDto?> GetPublicStatusAsync(string applicationNumber, string? paymentAccessToken, string? requestToken = null)
@@ -152,17 +193,7 @@ public class DemandWorkflowService : IDemandWorkflowService
             _db.DemandApplicationWorkflows.Add(workflow);
             await _db.SaveChangesAsync();
             await _audit.LogAsync("Application Submitted", nameof(DemandApplication), applicationId);
-            try
-            {
-                await _sms.SendAsync(application.Mobile, "ApplicationSubmitted", new Dictionary<string, string?> { ["ServiceName"] = application.ServiceDescription, ["ApplicationNumber"] = application.ApplicationNumber }, application.ApplicationNumber);
-            }
-            catch (Exception ex)
-            {
-                // Submission and the JE workflow have already been persisted.
-                // A disabled/mock notification adapter must never turn a valid
-                // applicant submission into a false HTTP 500 response.
-                _logger.LogError(ex, "ApplicationSubmitted SMS event could not be recorded for demand application {ApplicationId}.", applicationId);
-            }
+            await _sms.SendAsync(application.Mobile, $"आपला अर्ज {application.ApplicationNumber} यशस्वीरीत्या सादर झाला आहे.");
         }
         return ToDto(await _db.DemandApplicationWorkflows.Include(x => x.DemandApplication).FirstAsync(x => x.Id == workflow.Id));
     }
@@ -196,16 +227,7 @@ public class DemandWorkflowService : IDemandWorkflowService
         workflow.DemandApplication.Status = DemandApplicationStatus.FeePending;
         await _db.SaveChangesAsync();
         await _audit.LogAsync("Payment Request Sent", nameof(DemandApplication), id);
-        try
-        {
-            await _sms.SendAsync(workflow.DemandApplication.Mobile, "PaymentRequired", new Dictionary<string, string?> { ["ApplicationNumber"] = workflow.DemandApplication.ApplicationNumber, ["Amount"] = workflow.PayableAmount.ToString("N2", CultureInfo.InvariantCulture), ["PaymentLink"] = workflow.PaymentLink }, workflow.DemandApplication.ApplicationNumber);
-        }
-        catch (Exception ex)
-        {
-            // The payment request is already durable. A disabled/mock notification
-            // adapter must not turn it into a false workflow failure.
-            _logger.LogError(ex, "PaymentRequired SMS event could not be recorded for demand application {ApplicationId}.", id);
-        }
+        await _sms.SendAsync(workflow.DemandApplication.Mobile, $"अर्ज {workflow.DemandApplication.ApplicationNumber} साठी देय रक्कम ₹{workflow.PayableAmount.ToString("N2", CultureInfo.InvariantCulture)} आहे. पेमेंट लिंक उघडा: {workflow.PaymentLink}");
         return ToDto(workflow);
     }
 
@@ -240,16 +262,6 @@ public class DemandWorkflowService : IDemandWorkflowService
         workflow.Utr = dto.Utr.Trim(); workflow.PaymentDate = dto.PaymentDate.Date; workflow.PaymentScreenshotPath = saved.filePath; workflow.PaymentScreenshotFileName = fileName; workflow.PaymentScreenshotSizeBytes = saved.size; workflow.PaymentSubmittedBy = "ApplicantPaymentLink"; workflow.PaymentSubmittedAt = DateTime.UtcNow; workflow.PaymentStatus = "PaymentVerificationPending"; workflow.Stage = "PaymentVerificationPending"; workflow.DemandApplication.PaymentStatus = "PaymentVerificationPending"; workflow.DemandApplication.Status = DemandApplicationStatus.FeePending; workflow.UpdatedBy = "ApplicantPaymentLink"; workflow.UpdatedAt = DateTime.UtcNow;
         await _db.SaveChangesAsync();
         await _audit.LogAsync("Payment Submitted", nameof(DemandApplication), id);
-        if (!workflow.OsPaymentNotificationSentAt.HasValue)
-        {
-            var osMobile = Environment.GetEnvironmentVariable("DEMAND_OS_MOBILE") ?? await _db.Users.Where(user => user.Role == UserRole.OS && user.IsActive && !user.IsDeleted).Select(user => user.Mobile).FirstOrDefaultAsync();
-            if (!string.IsNullOrWhiteSpace(osMobile))
-            {
-                await _sms.SendAsync(osMobile, "PaymentSubmitted", new Dictionary<string, string?> { ["ApplicationNumber"] = workflow.DemandApplication.ApplicationNumber }, workflow.DemandApplication.ApplicationNumber);
-                workflow.OsPaymentNotificationSentAt = DateTime.UtcNow;
-                await _db.SaveChangesAsync();
-            }
-        }
         return ToDto(workflow);
     }
 
@@ -261,10 +273,6 @@ public class DemandWorkflowService : IDemandWorkflowService
         workflow.PaymentStatus = approve ? "PaymentDone" : "PaymentPending";
         workflow.Stage = "PaymentRequired";
         var app = workflow.DemandApplication; app.PaymentStatus = workflow.PaymentStatus; app.Status = DemandApplicationStatus.FeePending; await _db.SaveChangesAsync(); await _audit.LogAsync(approve ? "Payment Verified" : "Payment Rejected", nameof(DemandApplication), id);
-        if (approve && workflow.Stage == "AssistantCommissionerApprovalPending")
-        {
-            await NotifyAssistantCommissionerAsync(app.ApplicationNumber);
-        }
         return ToDto(workflow);
     }
 
@@ -310,7 +318,7 @@ public class DemandWorkflowService : IDemandWorkflowService
             // cause the officer UI to report a false workflow failure.
             _logger.LogError(ex, "Workflow audit event could not be recorded for forwarded demand application {ApplicationId}.", id);
         }
-        await NotifyAssistantCommissionerAsync(workflow.DemandApplication.ApplicationNumber);
+        await _sms.SendAsync(workflow.DemandApplication.Mobile, $"अर्ज {workflow.DemandApplication.ApplicationNumber} पुढील मंजुरीसाठी पाठवण्यात आला आहे.");
         return ToDto(workflow);
     }
 
@@ -323,15 +331,7 @@ public class DemandWorkflowService : IDemandWorkflowService
         var saved = await _storage.SaveFileAsync(certificateStream, workflow.CertificateFileName, "application/pdf", "demandcertificates");
         workflow.CertificateFilePath = saved.filePath;
         await _db.SaveChangesAsync(); await _audit.LogAsync("Certificate Generated", nameof(DemandApplication), id); await _audit.LogAsync("Final Approved", nameof(DemandApplication), id);
-        try
-        {
-            await _sms.SendAsync(workflow.DemandApplication.Mobile, "ApplicationApproved", new Dictionary<string, string?> { ["ApplicationNumber"] = workflow.DemandApplication.ApplicationNumber }, workflow.DemandApplication.ApplicationNumber);
-            await _sms.SendAsync(workflow.DemandApplication.Mobile, "CertificateAvailable", new Dictionary<string, string?> { ["ServiceName"] = workflow.DemandApplication.ServiceDescription, ["ApplicationNumber"] = workflow.DemandApplication.ApplicationNumber, ["CertificateLink"] = BuildCertificateLink(workflow.DemandApplication.ApplicationNumber, workflow.PaymentAccessToken) }, workflow.DemandApplication.ApplicationNumber);
-        }
-        catch (Exception ex)
-        {
-            _logger.LogError(ex, "Approval notification event could not be recorded for demand application {ApplicationId}.", id);
-        }
+        await _sms.SendAsync(workflow.DemandApplication.Mobile, $"आपल्या अर्जास मंजुरी देण्यात आली आहे. अर्ज क्रमांक {workflow.DemandApplication.ApplicationNumber}.");
         return ToDto(workflow);
     }
 
@@ -373,19 +373,6 @@ public class DemandWorkflowService : IDemandWorkflowService
     private async Task<DemandApplicationWorkflow?> PublicWorkflow(string number, string token) { var workflow = await _db.DemandApplicationWorkflows.Include(x => x.DemandApplication).FirstOrDefaultAsync(x => x.DemandApplication.ApplicationNumber == number && !x.DemandApplication.IsDeleted); return workflow is not null && FixedTimeEquals(workflow.PaymentAccessToken, token) ? workflow : null; }
     private static string BuildPaymentLink(string number, string token) => $"{Environment.GetEnvironmentVariable("APP_BASE_URL")?.TrimEnd('/') ?? "http://localhost:3000"}/application-status?applicationNumber={Uri.EscapeDataString(number)}&token={Uri.EscapeDataString(token)}";
     private static string? BuildCertificateLink(string number, string? token) => string.IsNullOrWhiteSpace(token) ? null : $"{Environment.GetEnvironmentVariable("APP_BASE_URL")?.TrimEnd('/') ?? "http://localhost:3000"}/api/demand-workflow/payment/{Uri.EscapeDataString(number)}/certificate-pdf?token={Uri.EscapeDataString(token)}";
-    private async Task NotifyAssistantCommissionerAsync(string applicationNumber)
-    {
-        var acMobile = Environment.GetEnvironmentVariable("DEMAND_AC_MOBILE") ?? await _db.Users.Where(user => user.Role == UserRole.AssistantCommissioner && user.IsActive && !user.IsDeleted).Select(user => user.Mobile).FirstOrDefaultAsync();
-        if (string.IsNullOrWhiteSpace(acMobile)) return;
-        try
-        {
-            await _sms.SendAsync(acMobile, "AssistantCommissionerNotification", new Dictionary<string, string?> { ["ApplicationNumber"] = applicationNumber }, applicationNumber);
-        }
-        catch (Exception ex)
-        {
-            _logger.LogError(ex, "Assistant Commissioner notification event could not be recorded for application {ApplicationNumber}.", applicationNumber);
-        }
-    }
     private static bool FixedTimeEquals(string? expected, string? supplied) => !string.IsNullOrWhiteSpace(expected) && !string.IsNullOrWhiteSpace(supplied) && System.Security.Cryptography.CryptographicOperations.FixedTimeEquals(System.Text.Encoding.UTF8.GetBytes(expected), System.Text.Encoding.UTF8.GetBytes(supplied));
     private static byte[] GeneratePdf(DemandApplicationWorkflow workflow, bool certificate)
     {

@@ -24,11 +24,9 @@ public class ApplicationDbContext : DbContext, IApplicationDbContext
     public DbSet<Calculation> Calculations => Set<Calculation>();
     public DbSet<Document> Documents => Set<Document>();
     public DbSet<AuditLog> AuditLogs => Set<AuditLog>();
-        public DbSet<DemandApplication> DemandApplications => Set<DemandApplication>();
-        public DbSet<DemandApplicationDocument> DemandApplicationDocuments => Set<DemandApplicationDocument>();
-        public DbSet<DemandApplicationWorkflow> DemandApplicationWorkflows => Set<DemandApplicationWorkflow>();
-        public DbSet<SmsEvent> SmsEvents => Set<SmsEvent>();
-        public DbSet<SmsTemplate> SmsTemplates => Set<SmsTemplate>();
+    public DbSet<DemandApplication> DemandApplications => Set<DemandApplication>();
+    public DbSet<DemandApplicationDocument> DemandApplicationDocuments => Set<DemandApplicationDocument>();
+    public DbSet<DemandApplicationWorkflow> DemandApplicationWorkflows => Set<DemandApplicationWorkflow>();
 
     public override async Task<int> SaveChangesAsync(CancellationToken cancellationToken = default)
     {

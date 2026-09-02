@@ -14,6 +14,18 @@ const paymentStatusText = (status) => ({
 
 const isCompleted = (status) => ["PaymentDone", "PaymentVerificationPending", "PaymentVerified"].includes(status)
 
+const loadRazorpay = () => new Promise((resolve, reject) => {
+  if (window.Razorpay) {
+    resolve()
+    return
+  }
+  const script = document.createElement("script")
+  script.src = "https://checkout.razorpay.com/v1/checkout.js"
+  script.onload = resolve
+  script.onerror = () => reject(new Error("Razorpay Checkout लोड करता आले नाही."))
+  document.body.appendChild(script)
+})
+
 export function ApplicantPaymentPanel({ applicationNumber, token, onSubmitted, embedded = false }) {
   const [payment, setPayment] = useState(null)
   const [utr, setUtr] = useState("")
@@ -21,6 +33,7 @@ export function ApplicantPaymentPanel({ applicationNumber, token, onSubmitted, e
   const [screenshot, setScreenshot] = useState(null)
   const [message, setMessage] = useState("")
   const [saving, setSaving] = useState(false)
+  const [razorpaySaving, setRazorpaySaving] = useState(false)
   const submissionInFlight = useRef(false)
 
   useEffect(() => {
@@ -34,6 +47,50 @@ export function ApplicantPaymentPanel({ applicationNumber, token, onSubmitted, e
       .then((response) => setPayment(response.data.data))
       .catch((error) => setMessage(error.response?.data?.messageMr || "पेमेंट माहिती लोड करता आली नाही."))
   }, [applicationNumber, token])
+
+  const payWithRazorpay = async () => {
+    if (razorpaySaving || isCompleted(payment?.paymentStatus)) return
+    setRazorpaySaving(true)
+    setMessage("")
+    try {
+      const response = await client.post(`/demand-workflow/payment/${encodeURIComponent(applicationNumber)}/razorpay/order`, null, { params: { token } })
+      const order = response.data.data
+      await loadRazorpay()
+      const checkout = new window.Razorpay({
+        key: order.keyId,
+        amount: order.amount,
+        currency: order.currency,
+        name: "सोलापूर महानगरपालिका",
+        description: `अर्ज क्रमांक ${payment.applicationNumber}`,
+        order_id: order.orderId,
+        handler: async (result) => {
+          try {
+            const verified = await client.post(`/demand-workflow/payment/${encodeURIComponent(applicationNumber)}/razorpay/verify`, {
+              orderId: result.razorpay_order_id,
+              paymentId: result.razorpay_payment_id,
+              signature: result.razorpay_signature,
+            }, { params: { token } })
+            setPayment((current) => ({ ...current, ...verified.data.data }))
+            onSubmitted?.(verified.data.data)
+            setMessage("Razorpay पेमेंट यशस्वी झाले आहे.")
+          } catch (error) {
+            setMessage(error.response?.data?.messageMr || error.response?.data?.message || "Razorpay पेमेंट पडताळता आले नाही.")
+          } finally {
+            setRazorpaySaving(false)
+          }
+        },
+        modal: { ondismiss: () => setRazorpaySaving(false) },
+      })
+      checkout.on("payment.failed", () => {
+        setMessage("Razorpay पेमेंट अयशस्वी झाले.")
+        setRazorpaySaving(false)
+      })
+      checkout.open()
+    } catch (error) {
+      setMessage(error.response?.data?.messageMr || error.response?.data?.message || error.message || "Razorpay पेमेंट सुरू करता आले नाही.")
+      setRazorpaySaving(false)
+    }
+  }
 
   const submit = async (event) => {
     event.preventDefault()
@@ -110,6 +167,10 @@ export function ApplicantPaymentPanel({ applicationNumber, token, onSubmitted, e
               </div>
             ) : (
               <form onSubmit={submit} style={{ display: "grid", gap: 12, marginTop: 20 }}>
+                <button type="button" className="btn btn-primary" onClick={payWithRazorpay} disabled={saving || razorpaySaving}>
+                  {razorpaySaving ? "Razorpay उघडत आहे..." : "Razorpay द्वारे पेमेंट करा"}
+                </button>
+                <div style={{ textAlign: "center", color: "#557084", fontSize: 13 }}>किंवा पेमेंट पावतीद्वारे नोंद करा</div>
                 <div style={{ fontSize: 13, color: "#557084" }}>पेमेंट केल्यानंतर खालील तपशील सादर करा. रक्कम OS ने निश्चित केलेली असून ती बदलता येत नाही.</div>
                 <label className="form-field">
                   <span>UTR / Transaction ID *</span>

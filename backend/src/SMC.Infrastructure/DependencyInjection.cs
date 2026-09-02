@@ -19,12 +19,15 @@ public static class DependencyInjection
         services.AddScoped<IApplicationDbContext>(sp => sp.GetRequiredService<ApplicationDbContext>());
 
         services.AddHttpContextAccessor();
-        services.Configure<SmsOptions>(config.GetSection("Sms"));
+        services.Configure<SmsOptions>(config.GetSection("Integrations:Sms"));
+        services.Configure<RazorpayOptions>(config.GetSection("Razorpay"));
         services.AddHttpClient("AclSms", client => client.Timeout = TimeSpan.FromSeconds(20));
+        services.AddHttpClient("Razorpay", client => client.Timeout = TimeSpan.FromSeconds(20));
         services.AddScoped<ICurrentUserService, CurrentUserService>();
         services.AddScoped<ITokenService, TokenService>();
         services.AddScoped<IFileStorageService, FileStorageService>();
         services.AddScoped<ISmsService, SmsService>();
+        services.AddScoped<IRazorpayGateway, RazorpayGateway>();
 
         return services;
     }

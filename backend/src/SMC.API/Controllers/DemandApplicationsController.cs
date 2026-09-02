@@ -26,10 +26,10 @@ public class DemandApplicationsController : ControllerBase
             : NotFound(ApiResponse<object>.Fail("अर्ज सापडला नाही किंवा आधीच हटवला आहे."));
     }
     [HttpPost("{id:int}/submit")][Authorize(Policy="AdminOrOfficer")] public async Task<IActionResult> Submit(int id){var result=await _service.SubmitAsync(id,_user.UserName??"System")??throw new InvalidOperationException("अर्ज सापडला नाही.");await _workflow.EnsureAsync(id,_user.UserName??"System");return Ok(ApiResponse<DemandApplicationDto>.Ok(result));}
-    [HttpPost("{id:int}/documents")][Authorize(Policy="AdminOrOfficer")][RequestSizeLimit(22_000_000)] public async Task<IActionResult> Upload(int id,[FromForm]string documentType,IFormFile file){if(!IsValidPdf(file,out var error))return BadRequest(ApiResponse<object>.Fail(error));await using var stream=file.OpenReadStream();return Ok(ApiResponse<DemandApplicationDocumentDto>.Ok(await _service.AddDocumentAsync(id,documentType,stream,file.FileName,file.ContentType,_user.UserName??"System")));}
+    [HttpPost("{id:int}/documents")][Authorize(Policy="AdminOrOfficer")][RequestSizeLimit(22_000_000)] public async Task<IActionResult> Upload(int id,[FromForm]string documentType,IFormFile file){if(!IsValidDemandDocument(file,out var error))return BadRequest(ApiResponse<object>.Fail(error));await using var stream=file.OpenReadStream();return Ok(ApiResponse<DemandApplicationDocumentDto>.Ok(await _service.AddDocumentAsync(id,documentType,stream,file.FileName,file.ContentType,_user.UserName??"System")));}
     [HttpDelete("{id:int}/documents/{documentId:int}")][Authorize(Policy="AdminOrOfficer")] public async Task<IActionResult> DeleteDocument(int id,int documentId)=>Ok(ApiResponse<object>.Ok(new {Result=await _service.DeleteDocumentAsync(id,documentId,_user.UserName??"System")}));
     [HttpGet("documents/{documentId:int}/download")][Authorize(Policy="DemandOfficer")] public async Task<IActionResult> Download(int documentId){var d=await _service.GetDocumentAsync(documentId);if(d is null)return NotFound();var root=_config["FileStorage:RootPath"]??Path.Combine(AppContext.BaseDirectory,"UploadedFiles");var path=Path.Combine(root,d.FilePath);if(!System.IO.File.Exists(path))return NotFound();return File(await System.IO.File.ReadAllBytesAsync(path),d.ContentType,d.FileName);}
-    [HttpPost("{id:int}/documents/{documentId:int}/verification")][Authorize(Roles="OS")] public async Task<IActionResult> VerifyDocument(int id,int documentId,DocumentVerificationDto dto){var document=await _service.SetDocumentVerificationAsync(id,documentId,dto.Status,_user.UserName??"System",dto.Remark);if(document.RequestToken is not null){var application=await _service.GetByIdAsync(id);var publicBase=_config["Sms:PublicBaseUrl"]?.TrimEnd('/');if(string.IsNullOrWhiteSpace(publicBase))return BadRequest(ApiResponse<object>.Fail("Sms:PublicBaseUrl कॉन्फिगरेशन आवश्यक आहे."));document.SecureRequestUrl=$"{publicBase}/application-status?applicationNumber={Uri.EscapeDataString(application!.ApplicationNumber)}&requestToken={Uri.EscapeDataString(document.RequestToken)}";document.RequestToken=null;}return Ok(ApiResponse<DemandApplicationDocumentDto>.Ok(document));}
+    [HttpPost("{id:int}/documents/{documentId:int}/verification")][Authorize(Roles="OS")] public async Task<IActionResult> VerifyDocument(int id,int documentId,DocumentVerificationDto dto){var document=await _service.SetDocumentVerificationAsync(id,documentId,dto.Status,_user.UserName??"System",dto.Remark);if(document.RequestToken is not null){var application=await _service.GetByIdAsync(id);var publicBase=Environment.GetEnvironmentVariable("APP_BASE_URL")?.TrimEnd('/') ?? "http://localhost:3000";document.SecureRequestUrl=$"{publicBase}/application-status?applicationNumber={Uri.EscapeDataString(application!.ApplicationNumber)}&requestToken={Uri.EscapeDataString(document.RequestToken)}";document.RequestToken=null;}return Ok(ApiResponse<DemandApplicationDocumentDto>.Ok(document));}
     [HttpPost("{id:int}/site-photo")]
     [Authorize(Roles = "OS")]
     [RequestSizeLimit(10 * 1024 * 1024)]
@@ -75,7 +75,7 @@ public class DemandApplicationsController : ControllerBase
     [RequestSizeLimit(22_000_000)]
     public async Task<IActionResult> UploadPublic(int id, [FromForm]string documentType, IFormFile file, [FromHeader(Name = "X-Demand-Application-Token")] string? accessToken)
     {
-        if (!IsValidPdf(file, out var error)) return BadRequest(ApiResponse<object>.Fail(error));
+        if (!IsValidDemandDocument(file, out var error)) return BadRequest(ApiResponse<object>.Fail(error));
         await using var stream = file.OpenReadStream();
         var result = await _service.AddPublicDocumentAsync(id, documentType, stream, file.FileName, file.ContentType, accessToken);
         return result is null ? NotFound() : Ok(ApiResponse<DemandApplicationDocumentDto>.Ok(result));
@@ -85,7 +85,7 @@ public class DemandApplicationsController : ControllerBase
     [RequestSizeLimit(22_000_000)]
     public async Task<IActionResult> ResubmitPublicDocument(int id, int documentId, IFormFile file, [FromHeader(Name = "X-Demand-Document-Request-Token")] string? requestToken)
     {
-        if (!IsValidPdf(file, out var error)) return BadRequest(ApiResponse<object>.Fail(error));
+        if (!IsValidDemandDocument(file, out var error)) return BadRequest(ApiResponse<object>.Fail(error));
         await using var stream=file.OpenReadStream(); var result=await _service.ResubmitPublicDocumentAsync(id,documentId,stream,file.FileName,file.ContentType,requestToken);
         return result is null ? NotFound() : Ok(ApiResponse<DemandApplicationDocumentDto>.Ok(result));
     }
@@ -103,13 +103,19 @@ public class DemandApplicationsController : ControllerBase
         var path = Path.Combine(root, d.FilePath);
         return !System.IO.File.Exists(path) ? NotFound() : File(await System.IO.File.ReadAllBytesAsync(path), d.ContentType, d.FileName);
     }
-    private static bool IsValidPdf(IFormFile? file, out string error)
+    private static bool IsValidDemandDocument(IFormFile? file, out string error)
     {
         if (file is null || file.Length == 0) { error = "कृपया फाईल निवडा."; return false; }
-        if (file.Length > 20 * 1024 * 1024) { error = "कागदपत्राचा आकार 20 MB पेक्षा जास्त असू शकत नाही."; return false; }
-        if (!string.Equals(Path.GetExtension(file.FileName), ".pdf", StringComparison.OrdinalIgnoreCase) || !string.Equals(file.ContentType, "application/pdf", StringComparison.OrdinalIgnoreCase)) { error = "फक्त PDF स्वरूपातील कागदपत्र अपलोड करा."; return false; }
-        using var stream = file.OpenReadStream(); var header = new byte[5];
-        if (stream.Read(header, 0, header.Length) != 5 || System.Text.Encoding.ASCII.GetString(header) != "%PDF-") { error = "फक्त वैध PDF स्वरूपातील कागदपत्र अपलोड करा."; return false; }
+        if (file.Length > 5 * 1024 * 1024) { error = "कागदपत्राचा आकार 5 MB पेक्षा जास्त असू शकत नाही."; return false; }
+        var extension = Path.GetExtension(file.FileName);
+        var isPdf = string.Equals(extension, ".pdf", StringComparison.OrdinalIgnoreCase) && string.Equals(file.ContentType, "application/pdf", StringComparison.OrdinalIgnoreCase);
+        var isDocx = string.Equals(extension, ".docx", StringComparison.OrdinalIgnoreCase) && string.Equals(file.ContentType, "application/vnd.openxmlformats-officedocument.wordprocessingml.document", StringComparison.OrdinalIgnoreCase);
+        if (!isPdf && !isDocx) { error = "फक्त PDF किंवा DOCX स्वरूपातील कागदपत्र अपलोड करा."; return false; }
+        if (isPdf)
+        {
+            using var stream = file.OpenReadStream(); var header = new byte[5];
+            if (stream.Read(header, 0, header.Length) != 5 || System.Text.Encoding.ASCII.GetString(header) != "%PDF-") { error = "फक्त वैध PDF स्वरूपातील कागदपत्र अपलोड करा."; return false; }
+        }
         error = string.Empty; return true;
     }
     private static bool IsValidSitePhoto(IFormFile? file, out string error)

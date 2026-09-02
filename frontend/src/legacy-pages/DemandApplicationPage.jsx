@@ -188,6 +188,7 @@ export default function DemandApplicationPage() {
   const [current, setCurrent] = useState(null);
   const [errors, setErrors] = useState({});
   const [message, setMessage] = useState("");
+  const [documentErrors, setDocumentErrors] = useState({});
   const [saving, setSaving] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const [uploading, setUploading] = useState(false);
@@ -608,23 +609,31 @@ export default function DemandApplicationPage() {
     const input = event.currentTarget;
     const file = input.files?.[0];
     if (!file || uploadInFlight.current) return;
+    const documentType = input.dataset.type || "इतर कागदपत्र";
+    const setDocumentError = (value) =>
+      setDocumentErrors((previous) => ({
+        ...previous,
+        [documentType]: value,
+      }));
     const extension = file.name.split(".").pop()?.toLowerCase();
-    if (extension !== "pdf" || (file.type && file.type !== "application/pdf")) {
-      setMessage("फक्त PDF स्वरूपातील कागदपत्र अपलोड करा.");
+    const isPdf = extension === "pdf" && (!file.type || file.type === "application/pdf");
+    const isDocx = extension === "docx" && (!file.type || file.type === "application/vnd.openxmlformats-officedocument.wordprocessingml.document");
+    if (!isPdf && !isDocx) {
+      setDocumentError("फक्त PDF किंवा DOCX स्वरूपातील कागदपत्र अपलोड करा.");
       input.value = "";
       return;
     }
-    if (file.size > 20 * 1024 * 1024) {
-      setMessage("कागदपत्राचा आकार 20 MB पेक्षा जास्त असू शकत नाही.");
+    if (file.size > 5 * 1024 * 1024) {
+      setDocumentError("कागदपत्राचा आकार 5 MB पेक्षा जास्त असू शकत नाही.");
       input.value = "";
       return;
     }
 
     uploadInFlight.current = true;
     setUploading(true);
-    setMessage(`फाईल निवडली: ${file.name}`);
+    setDocumentError("");
     const data = new FormData();
-    data.append("documentType", input.dataset.type || "इतर कागदपत्र");
+    data.append("documentType", documentType);
     data.append("file", file);
     try {
       const draft = await createDraftForDocumentUpload();
@@ -642,9 +651,9 @@ export default function DemandApplicationPage() {
           response.data.data,
         ],
       }));
-      setMessage("कागदपत्र यशस्वीरित्या अपलोड झाले.");
+      setDocumentError("");
     } catch (error) {
-      setMessage(
+      setDocumentError(
         error.response?.data?.messageMr || error.message || "कागदपत्र अपलोड करता आले नाही.",
       );
     } finally {
@@ -1051,7 +1060,7 @@ export default function DemandApplicationPage() {
                 </div>
                 <div className="demand-documents wide">
                   <h3>कागदपत्रे</h3>
-                  <p>फक्त PDF, कमाल 20 MB</p>
+                  <p>फक्त PDF किंवा DOCX, कमाल 5 MB</p>
                   <div className="demand-upload-row">
                     {[
                       "ओळखपत्र",
@@ -1066,8 +1075,9 @@ export default function DemandApplicationPage() {
                           data-type={type}
                           onChange={upload}
                           disabled={saving || uploading}
-                          accept=".pdf,application/pdf"
+                          accept=".pdf,.docx,application/pdf,application/vnd.openxmlformats-officedocument.wordprocessingml.document"
                         />
+                        {documentErrors[type] && <small className="error-msg">{documentErrors[type]}</small>}
                       </label>
                     ))}
                   </div>

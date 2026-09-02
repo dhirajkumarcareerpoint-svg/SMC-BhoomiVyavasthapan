@@ -13,6 +13,9 @@ public class DemandApplicationWorkflowConfiguration : IEntityTypeConfiguration<D
         builder.Property(x => x.Stage).IsRequired().HasMaxLength(50);
         builder.Property(x => x.PaymentStatus).IsRequired().HasMaxLength(50);
         builder.Property(x => x.PaymentAccessToken).HasMaxLength(128);
+        builder.Property(x => x.RazorpayOrderId).HasMaxLength(64);
+        builder.Property(x => x.RazorpayPaymentId).HasMaxLength(64);
+        builder.Property(x => x.RazorpaySignature).HasMaxLength(128);
         builder.Property(x => x.PayableAmount).HasColumnType("decimal(18,2)");
         builder.HasIndex(x => x.DemandApplicationId).IsUnique();
         builder.HasIndex(x => new { x.Stage, x.PaymentStatus });

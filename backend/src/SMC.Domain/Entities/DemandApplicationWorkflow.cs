@@ -11,6 +11,9 @@ public class DemandApplicationWorkflow : BaseEntity
     public decimal PayableAmount { get; set; }
     public string PaymentStatus { get; set; } = "NotRequired";
     public string? PaymentLink { get; set; }
+    public string? RazorpayOrderId { get; set; }
+    public string? RazorpayPaymentId { get; set; }
+    public string? RazorpaySignature { get; set; }
     // A high-entropy capability token proves possession of the payment link.  It is
     // deliberately separate from the application number so a number alone cannot
     // be used to view or submit a payment.
@@ -22,7 +25,6 @@ public class DemandApplicationWorkflow : BaseEntity
     public long? PaymentScreenshotSizeBytes { get; set; }
     public string? PaymentSubmittedBy { get; set; }
     public DateTime? PaymentSubmittedAt { get; set; }
-    public DateTime? OsPaymentNotificationSentAt { get; set; }
     public string? PaymentVerifiedBy { get; set; }
     public DateTime? PaymentVerifiedAt { get; set; }
     public string? CertificateFilePath { get; set; }

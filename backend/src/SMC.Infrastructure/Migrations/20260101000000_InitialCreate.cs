@@ -1,11 +1,14 @@
 using System;
+using Microsoft.EntityFrameworkCore.Infrastructure;
 using Microsoft.EntityFrameworkCore.Migrations;
+using SMC.Infrastructure.Persistence;
 
 #nullable disable
 
 namespace SMC.Infrastructure.Migrations
 {
     /// <inheritdoc />
+    [DbContext(typeof(ApplicationDbContext))]
     [Migration("20260101000000_InitialCreate")]
     public partial class InitialCreate : Migration
     {

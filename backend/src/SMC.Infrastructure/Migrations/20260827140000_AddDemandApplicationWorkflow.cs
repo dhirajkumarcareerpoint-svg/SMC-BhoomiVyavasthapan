@@ -1,9 +1,12 @@
 using Microsoft.EntityFrameworkCore.Migrations;
+using Microsoft.EntityFrameworkCore.Infrastructure;
+using SMC.Infrastructure.Persistence;
 
 #nullable disable
 
 namespace SMC.Infrastructure.Migrations;
 
+[DbContext(typeof(ApplicationDbContext))]
 [Migration("20260827140000_AddDemandApplicationWorkflow")]
 public partial class AddDemandApplicationWorkflow : Migration
 {

@@ -22,7 +22,7 @@ export default function HomePage() {
             <h2>मागणी अर्ज</h2>
             <p>सेवा, जागा आणि अर्जदाराची माहिती एकाच अर्जातून सादर करा</p>
           </div>
-          <Link className="btn btn-primary home-demand-button" href="/demand-application" target="_blank" rel="noopener noreferrer">अर्ज करा</Link>
+          <Link className="btn btn-primary home-demand-button" href="/demand-application">अर्ज करा</Link>
         </article>
         <article className="home-demand-card">
           <div className="home-demand-icon" aria-hidden="true">🔎</div>

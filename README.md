@@ -145,6 +145,32 @@ npm run dev
 - Global exception middleware (मराठी error messages)
 - EF Core global query filters (soft-deleted records आपोआप वगळले जातात)
 
+### ACL SMS gateway
+
+The ACL SMS gateway is bound at `Integrations:Sms`. Keep credentials in user secrets or environment variables:
+
+```powershell
+dotnet user-secrets set "Integrations:Sms:Provider" "ACL" --project backend/src/SMC.API
+dotnet user-secrets set "Integrations:Sms:Enabled" "true" --project backend/src/SMC.API
+dotnet user-secrets set "Integrations:Sms:Acl:AppId" "<acl-app-id>" --project backend/src/SMC.API
+dotnet user-secrets set "Integrations:Sms:Acl:UserId" "<acl-user-id>" --project backend/src/SMC.API
+dotnet user-secrets set "Integrations:Sms:Acl:Password" "<acl-password>" --project backend/src/SMC.API
+dotnet user-secrets set "Integrations:Sms:Acl:DltTemplateId" "<dlt-template-id>" --project backend/src/SMC.API
+```
+
+### Razorpay payment gateway
+
+Razorpay order creation and payment signature verification are handled by the API. Configure the live values through user secrets or deployment environment variables; do not commit them to `appsettings*.json`:
+
+```powershell
+dotnet user-secrets set "Razorpay:Enabled" "true" --project backend/src/SMC.API
+dotnet user-secrets set "Razorpay:KeyId" "<razorpay-key-id>" --project backend/src/SMC.API
+dotnet user-secrets set "Razorpay:KeySecret" "<razorpay-key-secret>" --project backend/src/SMC.API
+dotnet user-secrets set "Razorpay:WebhookSecret" "<razorpay-webhook-secret>" --project backend/src/SMC.API
+```
+
+Environment variable equivalents are `Razorpay__Enabled`, `Razorpay__KeyId`, `Razorpay__KeySecret`, and `Razorpay__WebhookSecret`. The applicant payment page opens Razorpay Checkout, and the API verifies the returned signature before recording the payment.
+
 ## 📝 Audit Trail
 प्रत्येक Create/Update/Delete वर `AuditLog` table मध्ये नोंद होते: कोणी (User), काय (EntityName+Field), जुनी value, नवीन value, तारीख-वेळ, IP. प्रत्येक record च्या "बदल इतिहास" tab मध्ये तसेच स्वतंत्र "Audit इतिहास" पानावर हे दिसते.
 

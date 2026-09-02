@@ -1,0 +1,1 @@
+self.__REACT_LOADABLE_MANIFEST="{\"src\\\\legacy-pages\\\\DemandApplicationPage.jsx -> html2pdf.js\":{\"id\":\"src\\\\legacy-pages\\\\DemandApplicationPage.jsx -> html2pdf.js\",\"files\":[\"static/chunks/_app-pages-browser_node_modules_html2pdf_js_dist_html2pdf_js.js\"]}}"

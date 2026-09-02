@@ -37,6 +37,21 @@ public class PaymentConfirmationDto
     public DateTime PaymentDate { get; set; }
 }
 
+public class RazorpayPaymentDto
+{
+    public string OrderId { get; set; } = string.Empty;
+    public string PaymentId { get; set; } = string.Empty;
+    public string Signature { get; set; } = string.Empty;
+}
+
+public class RazorpayOrderDto
+{
+    public string KeyId { get; set; } = string.Empty;
+    public string OrderId { get; set; } = string.Empty;
+    public int Amount { get; set; }
+    public string Currency { get; set; } = "INR";
+}
+
 public class PublicPaymentDto
 {
     public int DemandApplicationId { get; set; }

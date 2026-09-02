@@ -1,11 +1,14 @@
 using System;
+using Microsoft.EntityFrameworkCore.Infrastructure;
 using Microsoft.EntityFrameworkCore.Migrations;
+using SMC.Infrastructure.Persistence;
 
 #nullable disable
 
 namespace SMC.Infrastructure.Migrations
 {
     /// <inheritdoc />
+    [DbContext(typeof(ApplicationDbContext))]
     [Migration("20260210000000_AddCalculations")]
     public partial class AddCalculations : Migration
     {

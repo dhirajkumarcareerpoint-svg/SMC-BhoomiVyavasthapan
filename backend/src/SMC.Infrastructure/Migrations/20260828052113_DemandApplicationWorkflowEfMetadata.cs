@@ -11,6 +11,8 @@ namespace SMC.Infrastructure.Migrations
         /// <inheritdoc />
         protected override void Up(MigrationBuilder migrationBuilder)
         {
+            if (migrationBuilder.ActiveProvider == "__legacy_duplicate__")
+            {
             migrationBuilder.CreateTable(
                 name: "DemandApplicationWorkflows",
                 columns: table => new
@@ -68,13 +70,12 @@ namespace SMC.Infrastructure.Migrations
                 name: "IX_DemandApplicationWorkflows_Stage_PaymentStatus",
                 table: "DemandApplicationWorkflows",
                 columns: new[] { "Stage", "PaymentStatus" });
+            }
         }
 
         /// <inheritdoc />
         protected override void Down(MigrationBuilder migrationBuilder)
         {
-            migrationBuilder.DropTable(
-                name: "DemandApplicationWorkflows");
         }
     }
 }

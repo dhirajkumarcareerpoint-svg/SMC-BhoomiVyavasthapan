@@ -31,6 +31,16 @@ public class DemandWorkflowController : ControllerBase
     }
 
     [AllowAnonymous]
+    [HttpPost("payment/{applicationNumber}/razorpay/order")]
+    public async Task<IActionResult> RazorpayOrder(string applicationNumber, [FromQuery] string token, CancellationToken cancellationToken)
+        => Ok(ApiResponse<RazorpayOrderDto>.Ok(await _service.CreateRazorpayOrderAsync(applicationNumber, token, cancellationToken)));
+
+    [AllowAnonymous]
+    [HttpPost("payment/{applicationNumber}/razorpay/verify")]
+    public async Task<IActionResult> RazorpayVerify(string applicationNumber, [FromQuery] string token, [FromBody] RazorpayPaymentDto dto, CancellationToken cancellationToken)
+        => Ok(ApiResponse<DemandWorkflowDto>.Ok(await _service.VerifyRazorpayPaymentAsync(applicationNumber, token, dto, cancellationToken)));
+
+    [AllowAnonymous]
     [HttpGet("public-status/{applicationNumber}")]
     public async Task<IActionResult> PublicStatus(string applicationNumber, [FromQuery(Name = "token")] string? paymentAccessToken, [FromQuery] string? requestToken)
     {
