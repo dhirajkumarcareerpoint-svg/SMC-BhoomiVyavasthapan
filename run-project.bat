@@ -5,7 +5,6 @@ set "ROOT=%~dp0"
 set "BACKEND_DIR=%ROOT%backend\src\SMC.API"
 set "FRONTEND_DIR=%ROOT%frontend"
 set "SMC_PROJECT_ROOT=%ROOT:~0,-1%"
-set "CLEAR_NEXT_CACHE=0"
 
 echo.
 echo ========================================
@@ -31,16 +30,11 @@ if errorlevel 1 exit /b 1
 call :PreparePort 3000 Frontend
 if errorlevel 1 exit /b 1
 
-if "%CLEAR_NEXT_CACHE%"=="1" if exist "%FRONTEND_DIR%\.next" (
-    echo Clearing only the stale frontend .next cache...
-    rmdir /s /q "%FRONTEND_DIR%\.next"
-)
-
 echo.
 echo Starting Backend...
 echo Backend: http://localhost:5072
 echo Swagger: http://localhost:5072/swagger
-start "SMC Bhoomi API [SMC_BHOOMI]" /D "%BACKEND_DIR%" cmd.exe /k "title SMC Bhoomi API [SMC_BHOOMI]&& set ASPNETCORE_ENVIRONMENT=Development&& set SMC_BHOOMI_PROJECT=1&& dotnet run --project SMC.API.csproj --no-launch-profile --urls http://localhost:5072"
+start "SMC Bhoomi API [SMC_BHOOMI]" /D "%BACKEND_DIR%" cmd.exe /k "title SMC Bhoomi API [SMC_BHOOMI]&& set ASPNETCORE_ENVIRONMENT=Development&& set SMC_BHOOMI_PROJECT=1&& dotnet run --project SMC.API.csproj --no-restore --no-launch-profile --urls http://localhost:5072"
 
 echo.
 echo Starting Frontend...
@@ -105,8 +99,7 @@ if /I "%PORT_RESULT%"=="FREE" (
 
 if /I "%PORT_RESULT%"=="PROJECT_STOPPED" (
     echo Stopped an old SMC Bhoomi %SMC_KIND% process on port %SMC_PORT%.
-    if /I "%SMC_KIND%"=="Frontend" set "CLEAR_NEXT_CACHE=1"
-    timeout /t 2 /nobreak >nul
+    powershell -NoProfile -ExecutionPolicy Bypass -Command "Start-Sleep -Seconds 2"
     exit /b 0
 )
 

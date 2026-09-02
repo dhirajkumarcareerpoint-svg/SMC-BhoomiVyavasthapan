@@ -82,7 +82,7 @@ public class DemandWorkflowController : ControllerBase
 
     [HttpPost("{applicationId:int}/payment-request")]
     [Authorize(Policy = "DemandOfficer")]
-    public async Task<IActionResult> PaymentRequest(int applicationId, [FromBody] PaymentRequestDto dto) => Ok(ApiResponse<DemandWorkflowDto>.Ok(await _service.CreatePaymentRequestAsync(applicationId, _user.UserName ?? "System", dto.PayableAmount)));
+    public async Task<IActionResult> PaymentRequest(int applicationId) => Ok(ApiResponse<DemandWorkflowDto>.Ok(await _service.CreatePaymentRequestAsync(applicationId, _user.UserName ?? "System")));
 
     [HttpPost("{applicationId:int}/payment")]
     [AllowAnonymous]
@@ -152,11 +152,6 @@ public class WorkflowDecisionDto
 {
     public bool Approve { get; set; }
     public string? Reason { get; set; }
-}
-
-public class PaymentRequestDto
-{
-    public decimal PayableAmount { get; set; }
 }
 
 public class PaymentStatusDto

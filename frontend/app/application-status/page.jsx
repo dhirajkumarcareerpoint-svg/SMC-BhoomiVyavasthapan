@@ -58,7 +58,7 @@ function ApplicationStatusContent() {
         },
       );
       setResult(response.data.data);
-      setPaymentOpen(Boolean(response.data.data.paymentAccessGranted));
+      setPaymentOpen(false);
     } catch {
       setError(
         "दिलेल्या अर्ज क्रमांकाची माहिती उपलब्ध नाही.",
@@ -164,14 +164,16 @@ function ApplicationStatusContent() {
       resubmitInFlight.current = false;
     }
   };
-  const paymentPending =
-    result?.currentStatus === "PaymentRequired" &&
-    result.paymentStatus === "PaymentRequired";
   const paymentCompleted = [
     "PaymentDone",
     "PaymentVerificationPending",
     "PaymentVerified",
   ].includes(result?.paymentStatus);
+  const paymentRequired =
+    Number(result?.payableAmount) > 0 &&
+    !paymentCompleted &&
+    (result?.currentStatus === "PaymentRequired" ||
+      ["PaymentRequired", "PaymentPending"].includes(result?.paymentStatus));
   return (
     <div style={{ maxWidth: 760, margin: "0 auto" }}>
       <div className="page-header">
@@ -235,7 +237,7 @@ function ApplicationStatusContent() {
                 {currentLabels[result.currentStatus] || result.currentStatus}
               </strong>
             </p>
-            {paymentPending && (
+            {paymentRequired && (
               <div
                 className="card"
                 style={{
@@ -255,28 +257,37 @@ function ApplicationStatusContent() {
                     maximumFractionDigits: 2,
                   })}
                 </p>
-                {result.paymentAccessGranted ? (
-                  <>
-                    <button
-                      type="button"
-                      className="btn btn-primary"
-                      onClick={() => setPaymentOpen(true)}
-                    >
-                      पेमेंट करा
-                    </button>
-                    {paymentOpen && (
+                <button
+                  type="button"
+                  className="btn btn-primary"
+                  onClick={() => setPaymentOpen((open) => !open)}
+                  aria-expanded={paymentOpen}
+                >
+                  Payment करा
+                </button>
+                {paymentOpen && (
+                  result.paymentAccessGranted ? (
                       <ApplicantPaymentPanel
                         applicationNumber={result.applicationNumber}
                         token={paymentToken}
                         embedded
                         onSubmitted={() => lookup(result.applicationNumber)}
                       />
-                    )}
-                  </>
-                ) : (
-                  <p style={{ marginBottom: 0, color: "#557084" }}>
-                    पेमेंट करण्यासाठी मिळालेली सुरक्षित लिंक वापरा.
-                  </p>
+                  ) : (
+                    <div className="card" style={{ marginTop: 16, padding: 18, textAlign: "center" }}>
+                      <h3 style={{ marginTop: 0 }}>अर्ज क्रमांक: {result.applicationNumber}</h3>
+                      <img
+                        src="/Payment/Payment-qr.png"
+                        alt="SMC अधिकृत पेमेंट QR कोड"
+                        style={{ display: "block", width: "min(100%, 250px)", height: "auto", margin: "0 auto" }}
+                      />
+                      <p><b>देय रक्कम:</b> ₹{Number(result.payableAmount).toLocaleString("en-IN", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</p>
+                      <button type="button" className="btn btn-primary" disabled>Payment Done</button>
+                      <p style={{ marginBottom: 0, color: "#557084", fontSize: 12 }}>
+                        पेमेंट सादर करण्यासाठी SMS मधील सुरक्षित पेमेंट लिंक वापरा.
+                      </p>
+                    </div>
+                  )
                 )}
               </div>
             )}

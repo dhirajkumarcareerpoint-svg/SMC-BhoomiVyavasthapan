@@ -4,7 +4,7 @@ export default function HomePage() {
   return (
     <div className="home-page">
       <section className="home-hero" aria-labelledby="home-title">
-        <img className="home-hero-image" src="/smc-building.jpg" alt="सोलापूर महानगरपालिका इमारत" />
+        <img className="home-hero-image" src="/smc-building-hd.jpg" alt="सोलापूर महानगरपालिका इमारत" />
         <div className="home-hero-content">
           <div className="home-emblem" aria-hidden="true">सो</div>
           <div>

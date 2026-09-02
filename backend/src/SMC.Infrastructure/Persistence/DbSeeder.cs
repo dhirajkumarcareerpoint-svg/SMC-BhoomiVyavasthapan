@@ -9,8 +9,6 @@ public static class DbSeeder
 {
     public static async Task SeedAsync(ApplicationDbContext db)
     {
-        await db.Database.MigrateAsync();
-
         if (!await db.Users.AnyAsync())
         {
             var users = new List<User>

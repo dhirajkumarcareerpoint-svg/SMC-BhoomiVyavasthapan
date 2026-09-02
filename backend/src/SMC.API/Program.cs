@@ -1,6 +1,7 @@
 using System.Text;
 using Microsoft.AspNetCore.Authentication.JwtBearer;
 using Microsoft.AspNetCore.Authorization;
+using Microsoft.EntityFrameworkCore;
 using Microsoft.IdentityModel.Tokens;
 using Microsoft.OpenApi.Models;
 using SMC.API.Middleware;
@@ -96,18 +97,21 @@ builder.Services.AddAuthorizationBuilder()
 var app = builder.Build();
 
 // ---------- Auto-migrate + seed on startup ----------
-if (app.Environment.IsDevelopment())
+// MigrateAsync creates the configured database when it is missing and applies
+// only pending EF migrations. It never drops or recreates an existing database.
 {
     using var scope = app.Services.CreateScope();
     var db = scope.ServiceProvider.GetRequiredService<ApplicationDbContext>();
     try
     {
+        await db.Database.MigrateAsync();
         await DbSeeder.SeedAsync(db);
     }
     catch (Exception ex)
     {
         var logger = scope.ServiceProvider.GetRequiredService<ILogger<Program>>();
         logger.LogError(ex, "Database migrate/seed वेळी त्रुटी. SQL Server कनेक्शन तपासा.");
+        throw;
     }
 }
 

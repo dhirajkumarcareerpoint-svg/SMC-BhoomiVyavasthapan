@@ -18,7 +18,13 @@ public class DemandApplicationsController : ControllerBase
     [HttpGet("{id:int}")] public async Task<IActionResult> Get(int id){var x=await _service.GetByIdAsync(id);return x is null?NotFound():Ok(ApiResponse<DemandApplicationDto>.Ok(x));}
     [HttpPost][Authorize(Policy="AdminOrOfficer")] public async Task<IActionResult> Create(CreateDemandApplicationDto dto)=>Ok(ApiResponse<DemandApplicationDto>.Ok(await _service.CreateAsync(dto,_user.UserName??"System")));
     [HttpPut("{id:int}")][Authorize(Policy="AdminOrOfficer")] public async Task<IActionResult> Update(int id,UpdateDemandApplicationDto dto)=>Ok(ApiResponse<object>.Ok(new {Result=await _service.UpdateAsync(id,dto,_user.UserName??"System")}));
-    [HttpDelete("{id:int}")][Authorize(Policy="AdminOrOfficer")] public async Task<IActionResult> Delete(int id)=>Ok(ApiResponse<object>.Ok(new {Result=await _service.DeleteAsync(id,_user.UserName??"System")}));
+    [HttpDelete("{id:int}")][Authorize(Policy="DemandOfficer")] public async Task<IActionResult> Delete(int id)
+    {
+        var deleted = await _service.DeleteAsync(id, _user.UserName ?? "System");
+        return deleted
+            ? Ok(ApiResponse<object>.Ok(new { Result = true }, "अर्ज यशस्वीरीत्या हटवला आहे."))
+            : NotFound(ApiResponse<object>.Fail("अर्ज सापडला नाही किंवा आधीच हटवला आहे."));
+    }
     [HttpPost("{id:int}/submit")][Authorize(Policy="AdminOrOfficer")] public async Task<IActionResult> Submit(int id){var result=await _service.SubmitAsync(id,_user.UserName??"System")??throw new InvalidOperationException("अर्ज सापडला नाही.");await _workflow.EnsureAsync(id,_user.UserName??"System");return Ok(ApiResponse<DemandApplicationDto>.Ok(result));}
     [HttpPost("{id:int}/documents")][Authorize(Policy="AdminOrOfficer")][RequestSizeLimit(22_000_000)] public async Task<IActionResult> Upload(int id,[FromForm]string documentType,IFormFile file){if(!IsValidPdf(file,out var error))return BadRequest(ApiResponse<object>.Fail(error));await using var stream=file.OpenReadStream();return Ok(ApiResponse<DemandApplicationDocumentDto>.Ok(await _service.AddDocumentAsync(id,documentType,stream,file.FileName,file.ContentType,_user.UserName??"System")));}
     [HttpDelete("{id:int}/documents/{documentId:int}")][Authorize(Policy="AdminOrOfficer")] public async Task<IActionResult> DeleteDocument(int id,int documentId)=>Ok(ApiResponse<object>.Ok(new {Result=await _service.DeleteDocumentAsync(id,documentId,_user.UserName??"System")}));

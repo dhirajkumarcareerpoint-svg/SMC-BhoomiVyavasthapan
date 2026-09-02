@@ -23,7 +23,7 @@ public interface IDemandWorkflowService
     Task<DemandWorkflowDto> EnsureAsync(int applicationId, string actor);
     Task<DemandWorkflowDto> VerifyJeAsync(int applicationId, string actor, bool approve, string? reason);
     Task<DemandWorkflowDto> VerifyOsAsync(int applicationId, string actor, bool approve, string? reason);
-    Task<DemandWorkflowDto> CreatePaymentRequestAsync(int applicationId, string actor, decimal payableAmount);
+    Task<DemandWorkflowDto> CreatePaymentRequestAsync(int applicationId, string actor);
     Task<DemandWorkflowDto> SubmitPaymentAsync(int applicationId, PaymentConfirmationDto dto, Stream screenshot, string fileName, string contentType, string accessToken);
     Task<DemandWorkflowDto> VerifyPaymentAsync(int applicationId, string actor, bool approve, string? reason);
     Task<DemandWorkflowDto> SetPaymentStatusAsync(int applicationId, string actor, string paymentStatus);
@@ -83,7 +83,7 @@ public class DemandWorkflowService : IDemandWorkflowService
         {
             DemandApplicationId = app.Id, ApplicationNumber = app.ApplicationNumber, ApplicantName = app.ApplicantName, SubmittedAt = app.SubmittedAt, CurrentStatus = workflow.Stage, PayableAmount = workflow.PayableAmount, PaymentStatus = workflow.PaymentStatus,
             PaymentAccessGranted = workflow.Stage == "PaymentRequired"
-                && workflow.PaymentStatus == "PaymentRequired"
+                && workflow.PaymentStatus is "PaymentRequired" or "PaymentPending"
                 && FixedTimeEquals(workflow.PaymentAccessToken, paymentAccessToken), HasDocumentRequest = request is not null, RequestedDocumentId=request?.Id, RequestedDocumentType=request?.DocumentType, RequestedDocumentName=request?.FileName, RequestRemark=request?.RequestRemark, RequestDate=request?.RequestedAt, RequestStatus=request?.VerificationStatus, CanResubmitRequestedDocument=canResubmit,
             Je = new PublicWorkflowLevelDto { Status = je?.Action == "JE Verified" ? "Accepted" : je?.Action == "JE Rejected" ? "Rejected" : workflow.Stage == "JEPending" ? "Pending" : "Accepted", ActionAt = je?.Timestamp, RejectionReason = je?.Action == "JE Rejected" ? workflow.RejectionReason : null },
             Os = new PublicWorkflowLevelDto { Status = os?.Action == "Forwarded to Assistant Commissioner" || workflow.Stage is "AssistantCommissionerApprovalPending" or "Approved" ? "Forwarded" : os?.Action == "Payment Request Sent" ? "Payment Required" : os?.Action is "OS Rejected" or "Payment Rejected" ? "Rejected" : workflow.Stage == "OSPending" ? "Pending" : "Accepted", ActionAt = os?.Timestamp, RejectionReason = os?.Action is "OS Rejected" or "Payment Rejected" ? workflow.RejectionReason : null, PaymentStatus = workflow.PaymentStatus },
@@ -101,7 +101,7 @@ public class DemandWorkflowService : IDemandWorkflowService
             "AssistantCommissioner" => new[] { "AssistantCommissionerApprovalPending" },
             _ => Array.Empty<string>()
         };
-        var rows = await _db.DemandApplicationWorkflows.Include(x => x.DemandApplication).Where(x => stages.Contains(x.Stage)).OrderBy(x => x.CreatedAt).ToListAsync();
+        var rows = await _db.DemandApplicationWorkflows.Include(x => x.DemandApplication).Where(x => !x.IsDeleted && !x.DemandApplication.IsDeleted && stages.Contains(x.Stage)).OrderBy(x => x.CreatedAt).ToListAsync();
         return rows.Select(ToDto).ToList();
     }
 
@@ -126,7 +126,7 @@ public class DemandWorkflowService : IDemandWorkflowService
         var applicationIds = latestActions.Select(log => log.EntityId).ToList();
         var workflows = await _db.DemandApplicationWorkflows.AsNoTracking()
             .Include(workflow => workflow.DemandApplication)
-            .Where(workflow => applicationIds.Contains(workflow.DemandApplicationId))
+            .Where(workflow => !workflow.IsDeleted && !workflow.DemandApplication.IsDeleted && applicationIds.Contains(workflow.DemandApplicationId))
             .ToDictionaryAsync(workflow => workflow.DemandApplicationId);
 
         return latestActions
@@ -174,14 +174,17 @@ public class DemandWorkflowService : IDemandWorkflowService
         return Verify(id, actor, "OS", false, reason, "PaymentRequired", "OS Rejected");
     }
 
-    public async Task<DemandWorkflowDto> CreatePaymentRequestAsync(int id, string actor, decimal payableAmount)
+    public async Task<DemandWorkflowDto> CreatePaymentRequestAsync(int id, string actor)
     {
         EnsureActor(actor, "OS");
-        if (payableAmount <= 0m) throw new InvalidOperationException("कृपया वैध शुल्क रक्कम प्रविष्ट करा.");
         var workflow = await GetWorkflow(id);
         if (workflow.Stage != "OSPending") throw new InvalidOperationException("हा अर्ज OS पडताळणीसाठी प्रलंबित नाही.");
 
-        workflow.PayableAmount = decimal.Round(payableAmount, 2, MidpointRounding.AwayFromZero);
+        var calculatedAmount = workflow.DemandApplication.CalculatedRate;
+        if (calculatedAmount is null || calculatedAmount <= 0m)
+            throw new InvalidOperationException("अर्जाची गणना केलेली शुल्क रक्कम उपलब्ध किंवा वैध नाही. पेमेंट विनंती पाठवता येणार नाही.");
+
+        workflow.PayableAmount = decimal.Round(calculatedAmount.Value, 2, MidpointRounding.AwayFromZero);
         workflow.PaymentStatus = "PaymentRequired";
         workflow.Stage = "PaymentRequired";
         workflow.PaymentAccessToken = Convert.ToHexString(System.Security.Cryptography.RandomNumberGenerator.GetBytes(32));
@@ -210,7 +213,8 @@ public class DemandWorkflowService : IDemandWorkflowService
     {
         var workflow = await GetWorkflow(id);
         if (!FixedTimeEquals(workflow.PaymentAccessToken, accessToken)) throw new UnauthorizedAccessException("अवैध payment link.");
-        if (workflow.Stage != "PaymentRequired" || workflow.PaymentStatus != "PaymentRequired") throw new InvalidOperationException("हा अर्ज सध्या पेमेंट पुष्टीकरणासाठी उपलब्ध नाही.");
+        if (workflow.Stage != "PaymentRequired" || workflow.PaymentStatus is not ("PaymentRequired" or "PaymentPending")) throw new InvalidOperationException("हा अर्ज सध्या पेमेंट पुष्टीकरणासाठी उपलब्ध नाही.");
+        if (workflow.PayableAmount <= 0m) throw new InvalidOperationException("अर्जाची देय रक्कम उपलब्ध किंवा वैध नाही. पेमेंट सादर करता येणार नाही.");
         if (string.IsNullOrWhiteSpace(dto.Utr)) throw new InvalidOperationException("UTR / Transaction ID आवश्यक आहे.");
         if (!_storage.IsAllowedFile(fileName, screenshot.Length)) throw new InvalidOperationException("फक्त PDF/JPG/PNG/DOC/DOCX/XLSX फाईल (कमाल 10MB) परवानगी आहे.");
         if (await _db.DemandApplicationWorkflows.AnyAsync(x => x.Utr == dto.Utr && x.Id != workflow.Id)) throw new InvalidOperationException("हा UTR आधीच वापरला आहे.");
@@ -364,8 +368,8 @@ public class DemandWorkflowService : IDemandWorkflowService
         return ToDto(workflow);
     }
 
-    private async Task<DemandApplicationWorkflow> GetWorkflow(int id) => await _db.DemandApplicationWorkflows.Include(x => x.DemandApplication).ThenInclude(x => x.Documents).FirstOrDefaultAsync(x => x.DemandApplicationId == id) ?? throw new InvalidOperationException("वर्कफ्लो नोंद सापडली नाही.");
-    private async Task<DemandWorkflowDto?> FindDto(int id) { var x = await _db.DemandApplicationWorkflows.Include(x => x.DemandApplication).FirstOrDefaultAsync(x => x.DemandApplicationId == id); return x is null ? null : ToDto(x); }
+    private async Task<DemandApplicationWorkflow> GetWorkflow(int id) => await _db.DemandApplicationWorkflows.Include(x => x.DemandApplication).ThenInclude(x => x.Documents).FirstOrDefaultAsync(x => x.DemandApplicationId == id && !x.IsDeleted && !x.DemandApplication.IsDeleted) ?? throw new InvalidOperationException("वर्कफ्लो नोंद सापडली नाही.");
+    private async Task<DemandWorkflowDto?> FindDto(int id) { var x = await _db.DemandApplicationWorkflows.Include(x => x.DemandApplication).FirstOrDefaultAsync(x => x.DemandApplicationId == id && !x.IsDeleted && !x.DemandApplication.IsDeleted); return x is null ? null : ToDto(x); }
     private async Task<DemandApplicationWorkflow?> PublicWorkflow(string number, string token) { var workflow = await _db.DemandApplicationWorkflows.Include(x => x.DemandApplication).FirstOrDefaultAsync(x => x.DemandApplication.ApplicationNumber == number && !x.DemandApplication.IsDeleted); return workflow is not null && FixedTimeEquals(workflow.PaymentAccessToken, token) ? workflow : null; }
     private static string BuildPaymentLink(string number, string token) => $"{Environment.GetEnvironmentVariable("APP_BASE_URL")?.TrimEnd('/') ?? "http://localhost:3000"}/application-status?applicationNumber={Uri.EscapeDataString(number)}&token={Uri.EscapeDataString(token)}";
     private static string? BuildCertificateLink(string number, string? token) => string.IsNullOrWhiteSpace(token) ? null : $"{Environment.GetEnvironmentVariable("APP_BASE_URL")?.TrimEnd('/') ?? "http://localhost:3000"}/api/demand-workflow/payment/{Uri.EscapeDataString(number)}/certificate-pdf?token={Uri.EscapeDataString(token)}";
@@ -448,5 +452,5 @@ public class DemandWorkflowService : IDemandWorkflowService
     }
     private string RoleFor(string actor) => _currentUser.Role switch { "JE" => "JE", "OS" => "OS", "AssistantCommissioner" or "Admin" => "AssistantCommissioner", _ => "Applicant" };
     private void EnsureActor(string actor, params string[] roles) { if (!roles.Contains(RoleFor(actor), StringComparer.OrdinalIgnoreCase)) throw new UnauthorizedAccessException("या कृतीसाठी आपल्याला अधिकार नाहीत."); }
-    private static DemandWorkflowDto ToDto(DemandApplicationWorkflow x) => new() { Id = x.Id, DemandApplicationId = x.DemandApplicationId, ApplicationNumber = x.DemandApplication.ApplicationNumber, ApplicantName = x.DemandApplication.ApplicantName, Mobile = x.DemandApplication.Mobile, ServiceDescription = x.DemandApplication.ServiceDescription, SpaceRequirement = x.DemandApplication.SpaceRequirement, SubmittedAt = x.DemandApplication.SubmittedAt, ApplicationStatus = x.DemandApplication.Status.ToString(), Stage = x.Stage, PayableAmount = x.PayableAmount, PaymentStatus = x.PaymentStatus, PaymentLink = x.PaymentLink, Utr = x.Utr, PaymentDate = x.PaymentDate, PaymentScreenshotFileName = x.PaymentScreenshotFileName, PaymentScreenshotPath = x.PaymentScreenshotPath, RejectionReason = x.RejectionReason, CertificateFileName = x.CertificateFileName, CertificateFilePath = x.CertificateFilePath };
+    private static DemandWorkflowDto ToDto(DemandApplicationWorkflow x) => new() { Id = x.Id, DemandApplicationId = x.DemandApplicationId, ApplicationNumber = x.DemandApplication.ApplicationNumber, ApplicantName = x.DemandApplication.ApplicantName, Mobile = x.DemandApplication.Mobile, ServiceDescription = x.DemandApplication.ServiceDescription, SpaceRequirement = x.DemandApplication.SpaceRequirement, SubmittedAt = x.DemandApplication.SubmittedAt, ApplicationStatus = x.DemandApplication.Status.ToString(), Stage = x.Stage, PayableAmount = x.PayableAmount > 0m ? x.PayableAmount : x.DemandApplication.CalculatedRate ?? 0m, PaymentStatus = x.PaymentStatus, PaymentLink = x.PaymentLink, Utr = x.Utr, PaymentDate = x.PaymentDate, PaymentScreenshotFileName = x.PaymentScreenshotFileName, PaymentScreenshotPath = x.PaymentScreenshotPath, RejectionReason = x.RejectionReason, CertificateFileName = x.CertificateFileName, CertificateFilePath = x.CertificateFilePath };
 }

@@ -1,6 +1,6 @@
 "use client"
 
-import { useEffect, useState } from "react"
+import { useEffect, useRef, useState } from "react"
 import { useParams } from "next/navigation"
 import client from "../api/client"
 
@@ -21,6 +21,7 @@ export function ApplicantPaymentPanel({ applicationNumber, token, onSubmitted, e
   const [screenshot, setScreenshot] = useState(null)
   const [message, setMessage] = useState("")
   const [saving, setSaving] = useState(false)
+  const submissionInFlight = useRef(false)
 
   useEffect(() => {
     if (!token) {
@@ -36,6 +37,7 @@ export function ApplicantPaymentPanel({ applicationNumber, token, onSubmitted, e
 
   const submit = async (event) => {
     event.preventDefault()
+    if (saving || submissionInFlight.current || isCompleted(payment?.paymentStatus)) return
     if (!screenshot || !utr.trim()) {
       setMessage("पेमेंट पूर्ण झाल्यानंतर UTR आणि पेमेंट पावती निवडा.")
       return
@@ -46,6 +48,7 @@ export function ApplicantPaymentPanel({ applicationNumber, token, onSubmitted, e
     data.append("paymentDate", paymentDate)
     data.append("screenshot", screenshot)
     data.append("token", token)
+    submissionInFlight.current = true
     setSaving(true)
     setMessage("")
 
@@ -58,6 +61,7 @@ export function ApplicantPaymentPanel({ applicationNumber, token, onSubmitted, e
       setMessage(error.response?.data?.messageMr || error.response?.data?.message || "पेमेंट पुष्टीकरण सादर करता आले नाही.")
     } finally {
       setSaving(false)
+      submissionInFlight.current = false
     }
   }
 
@@ -120,7 +124,7 @@ export function ApplicantPaymentPanel({ applicationNumber, token, onSubmitted, e
                   <input className="input" type="file" accept=".pdf,.jpg,.jpeg,.png,.doc,.docx,.xlsx" onChange={(event) => setScreenshot(event.target.files?.[0] || null)} required />
                 </label>
                 {message && <div className="error-msg" role="status">{message}</div>}
-                <button className="btn btn-primary" disabled={saving}>{saving ? "सादर करत आहे..." : "पेमेंट पूर्ण झाल्याची पुष्टी करा"}</button>
+                <button className="btn btn-primary" disabled={saving}>{saving ? "सादर करत आहे..." : "Payment Done"}</button>
               </form>
             )}
           </div>
