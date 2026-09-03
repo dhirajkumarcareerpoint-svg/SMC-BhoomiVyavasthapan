@@ -18,6 +18,7 @@ public interface IApplicationDbContext
     DbSet<DemandApplication> DemandApplications { get; }
     DbSet<DemandApplicationDocument> DemandApplicationDocuments { get; }
     DbSet<DemandApplicationWorkflow> DemandApplicationWorkflows { get; }
+    DbSet<SmsEvent> SmsEvents { get; }
 
     Task<int> SaveChangesAsync(CancellationToken cancellationToken = default);
 }

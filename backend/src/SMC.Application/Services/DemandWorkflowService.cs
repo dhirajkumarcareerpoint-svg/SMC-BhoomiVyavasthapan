@@ -193,7 +193,6 @@ public class DemandWorkflowService : IDemandWorkflowService
             _db.DemandApplicationWorkflows.Add(workflow);
             await _db.SaveChangesAsync();
             await _audit.LogAsync("Application Submitted", nameof(DemandApplication), applicationId);
-            await _sms.SendAsync(application.Mobile, $"आपला अर्ज {application.ApplicationNumber} यशस्वीरीत्या सादर झाला आहे.");
         }
         return ToDto(await _db.DemandApplicationWorkflows.Include(x => x.DemandApplication).FirstAsync(x => x.Id == workflow.Id));
     }
@@ -227,7 +226,16 @@ public class DemandWorkflowService : IDemandWorkflowService
         workflow.DemandApplication.Status = DemandApplicationStatus.FeePending;
         await _db.SaveChangesAsync();
         await _audit.LogAsync("Payment Request Sent", nameof(DemandApplication), id);
-        await _sms.SendAsync(workflow.DemandApplication.Mobile, $"अर्ज {workflow.DemandApplication.ApplicationNumber} साठी देय रक्कम ₹{workflow.PayableAmount.ToString("N2", CultureInfo.InvariantCulture)} आहे. पेमेंट लिंक उघडा: {workflow.PaymentLink}");
+        var paymentUrlParts = SplitUrlForDlt(workflow.PaymentLink!);
+        await _sms.SendAsync(
+            SmsTemplateEvents.PaymentRequired,
+            workflow.DemandApplication.ApplicationNumber,
+            SmsTemplateMessages.PaymentRequired(
+                workflow.DemandApplication.ApplicationNumber,
+                workflow.PayableAmount.ToString("0.00", CultureInfo.InvariantCulture),
+                paymentUrlParts.first,
+                paymentUrlParts.second),
+            workflow.DemandApplication.Mobile);
         return ToDto(workflow);
     }
 
@@ -318,7 +326,10 @@ public class DemandWorkflowService : IDemandWorkflowService
             // cause the officer UI to report a false workflow failure.
             _logger.LogError(ex, "Workflow audit event could not be recorded for forwarded demand application {ApplicationId}.", id);
         }
-        await _sms.SendAsync(workflow.DemandApplication.Mobile, $"अर्ज {workflow.DemandApplication.ApplicationNumber} पुढील मंजुरीसाठी पाठवण्यात आला आहे.");
+        await _sms.SendAsync(
+            SmsTemplateEvents.AssistantCommissionerNotification,
+            workflow.DemandApplication.ApplicationNumber,
+            SmsTemplateMessages.AssistantCommissionerNotification(workflow.DemandApplication.ApplicationNumber));
         return ToDto(workflow);
     }
 
@@ -331,7 +342,11 @@ public class DemandWorkflowService : IDemandWorkflowService
         var saved = await _storage.SaveFileAsync(certificateStream, workflow.CertificateFileName, "application/pdf", "demandcertificates");
         workflow.CertificateFilePath = saved.filePath;
         await _db.SaveChangesAsync(); await _audit.LogAsync("Certificate Generated", nameof(DemandApplication), id); await _audit.LogAsync("Final Approved", nameof(DemandApplication), id);
-        await _sms.SendAsync(workflow.DemandApplication.Mobile, $"आपल्या अर्जास मंजुरी देण्यात आली आहे. अर्ज क्रमांक {workflow.DemandApplication.ApplicationNumber}.");
+        await _sms.SendAsync(
+            SmsTemplateEvents.ApplicationApproved,
+            workflow.DemandApplication.ApplicationNumber,
+            $"आपल्या अर्जास मंजुरी देण्यात आली आहे. अर्ज क्रमांक {workflow.DemandApplication.ApplicationNumber}.",
+            workflow.DemandApplication.Mobile);
         return ToDto(workflow);
     }
 
@@ -371,7 +386,14 @@ public class DemandWorkflowService : IDemandWorkflowService
     private async Task<DemandApplicationWorkflow> GetWorkflow(int id) => await _db.DemandApplicationWorkflows.Include(x => x.DemandApplication).ThenInclude(x => x.Documents).FirstOrDefaultAsync(x => x.DemandApplicationId == id && !x.IsDeleted && !x.DemandApplication.IsDeleted) ?? throw new InvalidOperationException("वर्कफ्लो नोंद सापडली नाही.");
     private async Task<DemandWorkflowDto?> FindDto(int id) { var x = await _db.DemandApplicationWorkflows.Include(x => x.DemandApplication).FirstOrDefaultAsync(x => x.DemandApplicationId == id && !x.IsDeleted && !x.DemandApplication.IsDeleted); return x is null ? null : ToDto(x); }
     private async Task<DemandApplicationWorkflow?> PublicWorkflow(string number, string token) { var workflow = await _db.DemandApplicationWorkflows.Include(x => x.DemandApplication).FirstOrDefaultAsync(x => x.DemandApplication.ApplicationNumber == number && !x.DemandApplication.IsDeleted); return workflow is not null && FixedTimeEquals(workflow.PaymentAccessToken, token) ? workflow : null; }
-    private static string BuildPaymentLink(string number, string token) => $"{Environment.GetEnvironmentVariable("APP_BASE_URL")?.TrimEnd('/') ?? "http://localhost:3000"}/application-status?applicationNumber={Uri.EscapeDataString(number)}&token={Uri.EscapeDataString(token)}";
+    private static string BuildPaymentLink(string number, string token) => $"{Environment.GetEnvironmentVariable("APP_BASE_URL")?.TrimEnd('/') ?? "https://localhost:3000"}/application-status?applicationNumber={Uri.EscapeDataString(number)}&token={Uri.EscapeDataString(token)}";
+    private static (string first, string second) SplitUrlForDlt(string url)
+    {
+        if (!Uri.TryCreate(url, UriKind.Absolute, out var uri) || uri.Scheme != Uri.UriSchemeHttps)
+            throw new InvalidOperationException("The applicant payment/status URL must use HTTPS.");
+        var splitAt = Math.Max(url.IndexOf("/application-status", StringComparison.Ordinal), url.Length / 2);
+        return (url[..splitAt], url[splitAt..]);
+    }
     private static string? BuildCertificateLink(string number, string? token) => string.IsNullOrWhiteSpace(token) ? null : $"{Environment.GetEnvironmentVariable("APP_BASE_URL")?.TrimEnd('/') ?? "http://localhost:3000"}/api/demand-workflow/payment/{Uri.EscapeDataString(number)}/certificate-pdf?token={Uri.EscapeDataString(token)}";
     private static bool FixedTimeEquals(string? expected, string? supplied) => !string.IsNullOrWhiteSpace(expected) && !string.IsNullOrWhiteSpace(supplied) && System.Security.Cryptography.CryptographicOperations.FixedTimeEquals(System.Text.Encoding.UTF8.GetBytes(expected), System.Text.Encoding.UTF8.GetBytes(supplied));
     private static byte[] GeneratePdf(DemandApplicationWorkflow workflow, bool certificate)

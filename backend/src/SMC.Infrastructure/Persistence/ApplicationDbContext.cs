@@ -27,6 +27,7 @@ public class ApplicationDbContext : DbContext, IApplicationDbContext
     public DbSet<DemandApplication> DemandApplications => Set<DemandApplication>();
     public DbSet<DemandApplicationDocument> DemandApplicationDocuments => Set<DemandApplicationDocument>();
     public DbSet<DemandApplicationWorkflow> DemandApplicationWorkflows => Set<DemandApplicationWorkflow>();
+    public DbSet<SmsEvent> SmsEvents => Set<SmsEvent>();
 
     public override async Task<int> SaveChangesAsync(CancellationToken cancellationToken = default)
     {

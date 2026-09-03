@@ -38,7 +38,8 @@ public class DemandApplicationService : IDemandApplicationService
     private readonly IApplicationDbContext _db;
     private readonly IAuditService _audit;
     private readonly IFileStorageService _storage;
-    public DemandApplicationService(IApplicationDbContext db, IAuditService audit, IFileStorageService storage) { _db = db; _audit = audit; _storage = storage; }
+    private readonly ISmsService _sms;
+    public DemandApplicationService(IApplicationDbContext db, IAuditService audit, IFileStorageService storage, ISmsService sms) { _db = db; _audit = audit; _storage = storage; _sms = sms; }
 
     private static DemandApplicationDto ToDto(DemandApplication x) => new()
     {
@@ -113,6 +114,7 @@ public class DemandApplicationService : IDemandApplicationService
         var number = ""; do { number = $"2026{Random.Shared.Next(0,10000):0000}"; } while (await _db.DemandApplications.AnyAsync(a => a.ApplicationNumber == number && a.Id != id));
         x.ApplicationNumber = number; x.Status = DemandApplicationStatus.Submitted; x.SubmittedAt = DateTime.UtcNow; x.UpdatedBy = "Applicant"; x.UpdatedAt = DateTime.UtcNow;
         await _db.SaveChangesAsync(); await _audit.LogAsync("Final Submission", nameof(DemandApplication), id);
+        await SendApplicationSubmittedSms(x);
         return ToPublicDto(x);
     }
     public async Task<DemandApplicationDocumentDto?> AddPublicDocumentAsync(int id, string type, Stream stream, string fileName, string contentType, string? accessToken)
@@ -178,7 +180,13 @@ public class DemandApplicationService : IDemandApplicationService
         await _audit.LogAsync("Delete", nameof(DemandApplication), id, null, null, "Officer permanently deleted application");
         return true;
     }
-    public async Task<DemandApplicationDto?> SubmitAsync(int id,string userName){var x=await _db.DemandApplications.Include(x=>x.Documents).FirstOrDefaultAsync(x=>x.Id==id&&!x.IsDeleted);if(x is null)return null;if(!x.DeclarationAccepted)throw new InvalidOperationException("घोषणा स्वीकारणे आवश्यक आहे.");var number="";do{number=$"2026{Random.Shared.Next(0,10000):0000}";}while(await _db.DemandApplications.AnyAsync(a=>a.ApplicationNumber==number&&a.Id!=id));x.ApplicationNumber=number;x.Status=DemandApplicationStatus.Submitted;x.SubmittedAt=DateTime.UtcNow;x.UpdatedBy=userName;x.UpdatedAt=DateTime.UtcNow;await _db.SaveChangesAsync();await _audit.LogAsync("Final Submission",nameof(DemandApplication),id);return ToDto(x);}
+    public async Task<DemandApplicationDto?> SubmitAsync(int id,string userName){var x=await _db.DemandApplications.Include(x=>x.Documents).FirstOrDefaultAsync(x=>x.Id==id&&!x.IsDeleted);if(x is null)return null;if(!x.DeclarationAccepted)throw new InvalidOperationException("घोषणा स्वीकारणे आवश्यक आहे.");var number="";do{number=$"2026{Random.Shared.Next(0,10000):0000}";}while(await _db.DemandApplications.AnyAsync(a=>a.ApplicationNumber==number&&a.Id!=id));x.ApplicationNumber=number;x.Status=DemandApplicationStatus.Submitted;x.SubmittedAt=DateTime.UtcNow;x.UpdatedBy=userName;x.UpdatedAt=DateTime.UtcNow;await _db.SaveChangesAsync();await _audit.LogAsync("Final Submission",nameof(DemandApplication),id);await SendApplicationSubmittedSms(x);return ToDto(x);}
+
+    private Task SendApplicationSubmittedSms(DemandApplication application) => _sms.SendAsync(
+        SmsTemplateEvents.ApplicationSubmitted,
+        application.ApplicationNumber,
+        SmsTemplateMessages.ApplicationSubmitted(application.ServiceType.ToString(), application.ApplicationNumber),
+        application.Mobile);
     public async Task<DemandApplicationDocumentDto> AddDocumentAsync(int id,string type,Stream stream,string fileName,string contentType,string userName){var x=await _db.DemandApplications.FirstOrDefaultAsync(x=>x.Id==id&&!x.IsDeleted)??throw new InvalidOperationException("अर्ज सापडला नाही.");if(!IsValidApplicantDocument(fileName,contentType,stream.Length))throw new InvalidOperationException("फक्त PDF किंवा DOCX स्वरूपातील कागदपत्र (कमाल 5 MB) परवानगी आहे.");var previous=await _db.DemandApplicationDocuments.Where(d=>d.DemandApplicationId==id&&d.DocumentType==type&&!d.IsDeleted).ToListAsync();foreach(var old in previous){old.IsDeleted=true;old.DeletedBy=userName;old.DeletedAt=DateTime.UtcNow;_storage.DeleteFile(old.FilePath);}var saved=await _storage.SaveFileAsync(stream,fileName,contentType,"demandapplications");var d=new DemandApplicationDocument{DemandApplicationId=x.Id,DocumentType=type,FileName=fileName,StoredFileName=saved.storedFileName,FilePath=saved.filePath,ContentType=saved.contentType,FileSizeBytes=saved.size,CreatedBy=userName};_db.DemandApplicationDocuments.Add(d);await _db.SaveChangesAsync();await _audit.LogAsync(previous.Count>0?"Document Replace":"Document Upload",nameof(DemandApplication),id,null,null,type);return new DemandApplicationDocumentDto{Id=d.Id,DocumentType=d.DocumentType,FileName=d.FileName,ContentType=d.ContentType,FileSizeBytes=d.FileSizeBytes,UploadedAt=d.CreatedAt};}
     public async Task<DemandApplicationDocumentDto> SetDocumentVerificationAsync(int applicationId, int documentId, string status, string userName, string? remark = null)
     {

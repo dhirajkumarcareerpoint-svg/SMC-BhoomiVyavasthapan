@@ -1183,7 +1183,9 @@ namespace SMC.Infrastructure.Migrations
 
                     b.HasIndex("Status", "CreatedAt");
 
-                    b.HasIndex("ApplicationNumber", "EventType", "CreatedAt");
+                    b.HasIndex("ApplicationNumber", "EventType")
+                        .IsUnique()
+                        .HasFilter("[ApplicationNumber] IS NOT NULL");
 
                     b.ToTable("SmsEvents", (string)null);
                 });
